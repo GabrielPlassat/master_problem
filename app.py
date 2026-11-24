@@ -7,7 +7,10 @@ import streamlit as st
 import requests
 import json
 import io
+import copy
 from datetime import datetime
+
+import sources
 
 # ─── CONFIG PAGE ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -66,6 +69,10 @@ PHASES = [
     ("5", "Ressources & Contraintes", "Décrire précisément vos moyens"),
     ("6", "Test de Cohérence",        "Évaluer la faisabilité du sous-problème"),
     ("7", "Formulation Finale",       "Formuler, exporter et agir"),
+    ("8", "Communs & Ressources",      "Ce qui existe déjà sur le wiki de la Fabrique des Mobilités"),
+    ("9", "Solutions & Acteurs",       "Solutions déjà déployées, recensées par France Mobilités"),
+    ("10", "Données Ouvertes",         "Données pour mesurer et piloter (data.gouv.fr, INSEE)"),
+    ("11", "Synthèse & Export",        "Votre fiche enrichie, prête à partager"),
 ]
 
 CYNEFIN_INFO = {
@@ -78,6 +85,7 @@ CYNEFIN_INFO = {
 # ─── SESSION STATE ───────────────────────────────────────────────────────────────
 DEFAULTS = {
     "phase": 0,
+    "max_phase": 0,             # phase la plus avancée atteinte (pour la navigation)
     "doc_text": "",
     "sofia_data": None,
     "problem_input": "",
@@ -104,10 +112,26 @@ DEFAULTS = {
     "coherence_details": {},
     "hmw": "",
     "final_data": {},
+    # Phases 8 à 11 — explorer ce qui existe déjà
+    "mots_cles": [],            # mots-clés du problème (partagés par les phases 8 à 10)
+    "requetes_donnees": [],     # requêtes de recherche de données ouvertes
+    "wiki_results": {},         # {type: [fiches classées par Claude]}
+    "wiki_synthese": "",
+    "fm_results": [],           # solutions France Mobilités classées
+    "fm_synthese": "",
+    "data_results": [],         # jeux de données classés
+    "data_synthese": "",
+    "retenus": {},              # {id: fiche} — ressources retenues par l'expert
+    "feuille_route": {},        # synthèse finale générée en phase 11
+    "_synth_data": None,
+    "_sel_sig": None,
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
-        st.session_state[k] = v
+        st.session_state[k] = copy.deepcopy(v)
+
+# Clés techniques à conserver lors d'un Reset / d'une restauration
+_KEEP_KEYS = {"restore_file", "_restored_sig"}
 
 # ─── HELPERS ────────────────────────────────────────────────────────────────────
 
@@ -293,7 +317,7 @@ def claude(prompt: str, system: str = None, max_tokens: int = 2000) -> str | Non
                 "system": sys,
                 "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=60,
+            timeout=120,
         )
         data = response.json()
         if "content" not in data:
@@ -322,14 +346,71 @@ def score_emoji(s: int, max_s: int = 100) -> str:
     return "🟢" if pct >= 70 else "🟡" if pct >= 40 else "🔴"
 
 
+def set_phase(n: int):
+    """Change de phase (utilisable en callback on_click). Mémorise la phase max atteinte."""
+    n = max(0, min(int(n), len(PHASES) - 1))
+    st.session_state.phase = n
+    st.session_state.max_phase = max(st.session_state.get("max_phase", 0), n)
+
+
 def next_phase():
-    st.session_state.phase += 1
-    st.rerun()
+    set_phase(st.session_state.phase + 1)
 
 
 def go_phase(n: int):
-    st.session_state.phase = n
+    set_phase(n)
     st.rerun()
+
+
+# ─── SAUVEGARDE / RESTAURATION ──────────────────────────────────────────────────
+SAVE_APP_ID = "formulateur_strategique"
+
+
+def build_save() -> str:
+    """Sérialise toute la progression (toutes les phases) en JSON."""
+    state = {k: st.session_state.get(k, v) for k, v in DEFAULTS.items()}
+    payload = {
+        "app": SAVE_APP_ID,
+        "version": 2,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "phase_label": PHASES[st.session_state.phase][1],
+        "state": state,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+
+def save_filename() -> str:
+    num = PHASES[st.session_state.phase][0]
+    return f"sauvegarde_phase{num}_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
+
+
+def load_save(raw: bytes) -> str | None:
+    """Restaure une sauvegarde. Renvoie un message d'erreur, ou None si OK."""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return "Fichier illisible : ce n'est pas un JSON valide."
+    if not isinstance(payload, dict) or payload.get("app") != SAVE_APP_ID \
+            or not isinstance(payload.get("state"), dict):
+        return ("Ce fichier n'est pas une sauvegarde de l'outil. Utilisez le bouton "
+                "« 💾 Sauvegarder ma progression » pour en créer une.")
+    state = payload["state"]
+    # On efface l'état courant (y compris les champs de saisie mémorisés)
+    for k in list(st.session_state.keys()):
+        if k not in _KEEP_KEYS:
+            del st.session_state[k]
+    for k, v in DEFAULTS.items():
+        st.session_state[k] = copy.deepcopy(state.get(k, v))
+    try:
+        phase = max(0, min(int(st.session_state.phase), len(PHASES) - 1))
+    except (TypeError, ValueError):
+        phase = 0
+    st.session_state.phase = phase
+    try:
+        st.session_state.max_phase = max(phase, min(int(st.session_state.max_phase), len(PHASES) - 1))
+    except (TypeError, ValueError):
+        st.session_state.max_phase = phase
+    return None
 
 
 # ─── SIDEBAR ────────────────────────────────────────────────────────────────────
@@ -345,27 +426,51 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### 📍 Progression")
+    st.caption("Cliquez sur une phase déjà atteinte pour y revenir.")
     for i, (num, name, _) in enumerate(PHASES):
-        if i < st.session_state.phase:
-            st.markdown(f"✅ **Phase {num}** – {name}")
-        elif i == st.session_state.phase:
+        if i == st.session_state.phase:
             st.markdown(f"▶️ **Phase {num} – {name}** ← ici")
+        elif i <= st.session_state.max_phase:
+            st.button(f"✅ Phase {num} – {name}", key=f"nav_{i}",
+                      on_click=set_phase, args=(i,), use_container_width=True)
         else:
             st.markdown(f"⬜ Phase {num} – {name}")
 
     st.divider()
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("◀ Retour", disabled=st.session_state.phase == 0, use_container_width=True):
-            st.session_state.phase -= 1
-            st.rerun()
+        st.button("◀ Retour", disabled=st.session_state.phase == 0, use_container_width=True,
+                  on_click=set_phase, args=(st.session_state.phase - 1,), key="back_sidebar")
     with col2:
         if st.button("🔄 Reset", use_container_width=True):
             for k in list(st.session_state.keys()):
-                del st.session_state[k]
+                if k not in _KEEP_KEYS:
+                    del st.session_state[k]
             for k, v in DEFAULTS.items():
-                st.session_state[k] = v
+                st.session_state[k] = copy.deepcopy(v)
             st.rerun()
+
+    st.divider()
+    st.markdown("### 💾 Sauvegarde")
+    st.caption(
+        "Téléchargez un fichier de sauvegarde pour reprendre plus tard "
+        "là où vous en êtes, sans tout refaire."
+    )
+    # Rempli en fin de script, pour que la sauvegarde contienne les dernières saisies
+    sidebar_save_slot = st.empty()
+
+    restore = st.file_uploader("📂 Reprendre une sauvegarde", type=["json"], key="restore_file")
+    if restore is not None:
+        sig = f"{restore.name}-{restore.size}"
+        if st.session_state.get("_restored_sig") != sig:
+            err = load_save(restore.getvalue())
+            if err:
+                st.error(err)
+            else:
+                st.session_state["_restored_sig"] = sig
+                st.rerun()
+        else:
+            st.success(f"Sauvegarde chargée : {restore.name}")
 
     st.divider()
     st.caption("Basé sur : Cynefin (Snowden), Problem Statement Canvas, JTBD, Double Diamant, HMW (IDEO), Frame Innovation (Dorst)")
@@ -379,6 +484,136 @@ def phase_header(num, name, desc):
   <p>{desc}</p>
 </div>
 """, unsafe_allow_html=True)
+
+
+# ─── PHASES 8-11 : HELPERS ──────────────────────────────────────────────────────
+def problem_brief() -> str:
+    """Le problème final, tel que formulé en phase 7 (ou à défaut le sous-problème)."""
+    fd = st.session_state.final_data or {}
+    parts = []
+    if st.session_state.hmw:
+        parts.append(f"Formulation « Comment pourrions-nous » : {st.session_state.hmw}")
+    if fd.get("formulation_complete"):
+        parts.append(f"Brief : {fd['formulation_complete']}")
+    if st.session_state.selected_sub_problem:
+        parts.append(f"Sous-problème : {st.session_state.selected_sub_problem}")
+    if st.session_state.reformulation:
+        parts.append(f"Problème général : {st.session_state.reformulation}")
+    return "\n".join(parts)
+
+
+def require_problem() -> bool:
+    if not st.session_state.hmw and not st.session_state.selected_sub_problem:
+        st.warning("⚠️ Formulez d'abord votre problème (phase 7), ou rechargez une sauvegarde.")
+        return False
+    st.info(f"**Problème** : {st.session_state.hmw or st.session_state.selected_sub_problem}")
+    return True
+
+
+def ensure_keywords(force: bool = False) -> bool:
+    """Demande à Claude les mots-clés et requêtes de recherche, une seule fois."""
+    if st.session_state.mots_cles and not force:
+        return True
+    prompt = f"""{problem_brief()}
+
+Pour rechercher ce qui existe déjà sur ce problème (communs, projets, solutions, acteurs, données ouvertes),
+fournis en JSON valide (aucun markdown) :
+- "mots_cles" : 10 à 15 mots-clés ou expressions courtes EN FRANÇAIS (1 à 3 mots chacun), du plus spécifique au plus général, avec les synonymes usuels du secteur (ex : "covoiturage", "autopartage", "zone peu dense", "rural", "transport à la demande"). Pas de mots vides ni de termes trop génériques comme "mobilité" seul.
+- "requetes_donnees" : 4 à 6 requêtes courtes (2-4 mots) pour chercher des jeux de données ouverts utiles pour mesurer ce problème et ses indicateurs (ex : "aires de covoiturage", "déplacements domicile travail", "offre transport en commun")."""
+    with st.spinner("Extraction des mots-clés du problème…"):
+        data = parse_json(claude(prompt, max_tokens=800))
+    if not data:
+        return False
+    st.session_state.mots_cles = [str(k) for k in data.get("mots_cles", []) if str(k).strip()]
+    st.session_state.requetes_donnees = [str(k) for k in data.get("requetes_donnees", []) if str(k).strip()]
+    return bool(st.session_state.mots_cles)
+
+
+def keywords_editor():
+    """Affiche les mots-clés, modifiables par l'expert."""
+    with st.expander("🔑 Mots-clés utilisés pour la recherche (modifiables)", expanded=False):
+        txt = st.text_area(
+            "Mots-clés (séparés par des virgules)",
+            value=", ".join(st.session_state.mots_cles), height=80,
+        )
+        st.session_state.mots_cles = [k.strip() for k in txt.split(",") if k.strip()]
+        txt2 = st.text_area(
+            "Requêtes de recherche de données (séparées par des virgules)",
+            value=", ".join(st.session_state.requetes_donnees), height=60,
+        )
+        st.session_state.requetes_donnees = [k.strip() for k in txt2.split(",") if k.strip()]
+        if st.button("🔄 Régénérer les mots-clés avec Claude", disabled=not API_KEY):
+            if ensure_keywords(force=True):
+                st.rerun()
+
+
+def rank_with_claude(candidates: list[dict], what: str, summary_fn, max_items: str,
+                     extra: str = "") -> tuple[list[dict], str]:
+    """Claude choisit et explique les candidats les plus pertinents.
+
+    Les candidats sont référencés par un identifiant court : Claude ne peut donc
+    citer que des fiches réellement trouvées (pas de lien inventé).
+    """
+    if not candidates:
+        return [], ""
+    by_id = {f"c{i}": c for i, c in enumerate(candidates, 1)}
+    listing = "\n".join(f"[{cid}] {summary_fn(c)}" for cid, c in by_id.items())
+    prompt = f"""{problem_brief()}
+
+Voici des {what} présélectionnés automatiquement par mots-clés (certains peuvent être hors sujet) :
+{listing}
+
+Sélectionne {max_items} les plus utiles pour l'expert qui doit traiter CE problème. Écarte ceux qui sont hors sujet.{extra}
+Réponds UNIQUEMENT en JSON valide (aucun markdown) :
+{{"selection": [{{"id": "c3", "pertinence": "forte" | "moyenne", "pourquoi": "1 phrase : en quoi c'est lié au problème", "comment_mobiliser": "1 phrase : ce que l'expert peut en faire concrètement (réutiliser, contacter, s'inspirer, contribuer...)"}}],
+ "synthese": "2-3 phrases : ce qui existe déjà, et ce qui semble manquer (angle mort, opportunité)"}}"""
+    with st.spinner(f"Claude analyse les {len(candidates)} {what} trouvés…"):
+        data = parse_json(claude(prompt, max_tokens=3500))
+    if not data:
+        return [], ""
+    out = []
+    for item in data.get("selection", []):
+        c = by_id.get(str(item.get("id", "")).strip())
+        if c:
+            out.append({**c, "pertinence": item.get("pertinence", ""),
+                        "pourquoi": item.get("pourquoi", ""),
+                        "comment_mobiliser": item.get("comment_mobiliser", "")})
+    return out, data.get("synthese", "")
+
+
+def toggle_retenu(item: dict):
+    ret = st.session_state.retenus
+    if item["_key"] in ret:
+        del ret[item["_key"]]
+    else:
+        ret[item["_key"]] = {k: v for k, v in item.items() if not k.startswith("_")}
+
+
+def show_item(item: dict, origin: str, details: list[str]):
+    """Carte d'une ressource : titre cliquable, pertinence, explications, case « retenir »."""
+    key = f"{origin}:{item.get('url') or item.get('titre')}"
+    item["_key"] = key
+    item["origine"] = origin
+    badge = "🟢" if item.get("pertinence") == "forte" else "🟡"
+    with st.container(border=True):
+        c1, c2 = st.columns([5, 1])
+        with c1:
+            titre = item.get("titre", "")
+            st.markdown(f"{badge} **[{titre}]({item['url']})**" if item.get("url") else f"{badge} **{titre}**")
+            meta = " · ".join(d for d in details if d)
+            if meta:
+                st.caption(meta)
+            if item.get("pourquoi"):
+                st.markdown(f"🔗 {item['pourquoi']}")
+            if item.get("comment_mobiliser"):
+                st.markdown(f"👉 *{item['comment_mobiliser']}*")
+        with c2:
+            st.checkbox("Retenir", value=key in st.session_state.retenus,
+                        key=f"keep_{key}", on_change=toggle_retenu, args=(item,))
+
+
+def show_source_error(name: str, err: Exception):
+    st.error(f"⚠️ {name} est momentanément inaccessible. Réessayez plus tard.\n\n`{err}`")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -803,7 +1038,7 @@ Réponds UNIQUEMENT avec un JSON valide : {{ "technologies": [ ... ] }}"""
 # PHASE 3 — DÉCOMPOSITION
 # ════════════════════════════════════════════════════════════════════════════════
 elif st.session_state.phase == 3:
-    phase_header("2", "Décomposition", "Explorer les sous-problèmes possibles et choisir votre cible.")
+    phase_header("4", "Décomposition", "Explorer les sous-problèmes possibles et choisir votre cible.")
 
     st.info(f"**Problème général** : {st.session_state.reformulation}")
     st.markdown("""
@@ -1033,7 +1268,13 @@ Génère en JSON valide (aucun markdown) :
 
     elif nb_sel == 1:
         sp = sel_list[0]
-        st.session_state.selected_sub_problem = f"{sp.get('titre', '')} : {sp.get('description', '')}"
+        # On ne pré-remplit qu'au moment où la sélection change (sinon on écraserait
+        # les ajustements de l'expert, notamment en revenant sur cette étape)
+        if st.session_state.get("_sel_sig") != sp.get("id"):
+            st.session_state.selected_sub_problem = f"{sp.get('titre', '')} : {sp.get('description', '')}"
+            st.session_state["_sel_sig"] = sp.get("id")
+    else:
+        st.session_state["_sel_sig"] = None
 
     # ── Formulation manuelle (toujours disponible) ────────────────────────────
     st.subheader("✍️ Formulation finale — ajustez si nécessaire")
@@ -1136,21 +1377,22 @@ elif st.session_state.phase == 4:
             placeholder="Ex: Campagne de sensibilisation en 2021 → faible adoption car pas de levier économique associé..."
         )
 
+    # Enregistrement à chaque modification (pour ne rien perdre en revenant en arrière)
+    st.session_state.resources = {
+        "budget": budget_total, "budget_rh": budget_rh,
+        "budget_prestation": budget_prestation, "etp": etp,
+        "competences": competences, "competences_manquantes": competences_manquantes,
+    }
+    st.session_state.constraints = {
+        "duree_mois": duree_mois, "jalon_mois": jalon_mois,
+        "objectif_principal": objectif_principal, "objectif_secondaire": objectif_secondaire,
+        "partenaires_imposes": partenaires_imposes, "partenaires_potentiels": partenaires_potentiels,
+        "deja_tente": deja_tente,
+    }
+
     st.divider()
 
-    if st.button("✅ Valider et tester la cohérence →", type="primary"):
-        st.session_state.resources = {
-            "budget": budget_total, "budget_rh": budget_rh,
-            "budget_prestation": budget_prestation, "etp": etp,
-            "competences": competences, "competences_manquantes": competences_manquantes,
-        }
-        st.session_state.constraints = {
-            "duree_mois": duree_mois, "jalon_mois": jalon_mois,
-            "objectif_principal": objectif_principal, "objectif_secondaire": objectif_secondaire,
-            "partenaires_imposes": partenaires_imposes, "partenaires_potentiels": partenaires_potentiels,
-            "deja_tente": deja_tente,
-        }
-        next_phase()
+    st.button("✅ Valider et tester la cohérence →", type="primary", on_click=next_phase)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1602,6 +1844,12 @@ Génère en JSON valide (aucun markdown, aucun backtick) avec EXACTEMENT cette s
                 use_container_width=True,
             )
 
+        st.info(
+            "💾 **Conservez votre problème formulé** : cliquez sur « Sauvegarder ma progression » "
+            "ci-dessous. En rechargeant ce fichier plus tard (barre latérale → Reprendre une "
+            "sauvegarde), vous reviendrez directement ici, sans refaire les phases 1 à 6."
+        )
+
         st.divider()
         st.success("""
 ✅ **Félicitations !** Vous avez formulé votre "bon" sous-problème.
@@ -1609,3 +1857,356 @@ Génère en JSON valide (aucun markdown, aucun backtick) avec EXACTEMENT cette s
 Cette fiche est votre référence de projet. Si le score de cohérence est sous 70, revoyez
 le périmètre avant de vous lancer. Un bon problème bien formulé, c'est déjà 50% du travail.
         """)
+
+        st.markdown("**Et maintenant ?** Avant d'agir, regardez ce qui existe déjà : communs, "
+                    "solutions déployées, acteurs et données ouvertes liés à votre problème.")
+        st.button("🔎 Explorer ce qui existe déjà →", type="primary", on_click=next_phase)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PHASE 7 — COMMUNS & RESSOURCES (wiki de la Fabrique des Mobilités)
+# ════════════════════════════════════════════════════════════════════════════════
+elif st.session_state.phase == 7:
+    phase_header("8", "Communs & Ressources",
+                 "Communs, projets, acteurs et connaissances du wiki de la Fabrique des Mobilités.")
+
+    if require_problem():
+        st.markdown("""
+> *Ne pas réinventer la roue.* Le [wiki de la Fabrique des Mobilités](https://wiki.lafabriquedesmobilites.fr)
+> recense des **communs** (logiciels, données, méthodes réutilisables), des **projets**, des **acteurs**
+> et des **connaissances**. Cette phase repère ceux qui concernent votre problème.
+""")
+        if st.session_state.mots_cles:
+            keywords_editor()
+
+        if st.button("🔎 Rechercher dans le wiki", type="primary", disabled=not API_KEY):
+            if ensure_keywords():
+                try:
+                    with st.spinner("Interrogation du wiki (environ 2 500 fiches)…"):
+                        cands = sources.wiki_candidates(st.session_state.mots_cles)
+                except Exception as e:  # noqa: BLE001
+                    show_source_error("Le wiki de la Fabrique des Mobilités", e)
+                    cands = None
+                if cands is not None:
+                    flat = [c for lst in cands.values() for c in lst]
+
+                    def wsum(c):
+                        bits = [c["type"], c["titre"]]
+                        if c.get("description"):
+                            bits.append(c["description"][:200])
+                        if c.get("tags"):
+                            bits.append("tags : " + ", ".join(c["tags"][:8]))
+                        if c.get("themes"):
+                            bits.append("thèmes : " + ", ".join(c["themes"][:5]))
+                        return " | ".join(bits)
+
+                    sel, synth = rank_with_claude(
+                        flat, "fiches du wiki (communs, projets, acteurs, connaissances)", wsum,
+                        "jusqu'à 4 par type (Commun, Projet, Acteur, Connaissance)")
+                    res = {t: [x for x in sel if x["type"] == t] for t in sources.WIKI_TYPES}
+                    st.session_state.wiki_results = res
+                    st.session_state.wiki_synthese = synth
+                    if not sel:
+                        st.warning("Aucune fiche pertinente trouvée. Essayez d'ajuster les mots-clés.")
+
+        res = st.session_state.wiki_results
+        if any(res.values()):
+            st.divider()
+            if st.session_state.wiki_synthese:
+                st.success(f"💡 {st.session_state.wiki_synthese}")
+            labels = {"Commun": "🧩 Communs", "Projet": "🚀 Projets",
+                      "Acteur": "👥 Acteurs", "Connaissance": "📚 Connaissances"}
+            tabs = st.tabs([f"{labels[t]} ({len(res.get(t, []))})" for t in sources.WIKI_TYPES])
+            for tab, t in zip(tabs, sources.WIKI_TYPES):
+                with tab:
+                    if not res.get(t):
+                        st.caption("Rien de pertinent trouvé dans cette catégorie.")
+                    for item in res.get(t, []):
+                        show_item(item, "Wiki FabMob – " + t, [
+                            item.get("description", "")[:160],
+                            ("Thèmes : " + ", ".join(item.get("themes", [])[:3])) if item.get("themes") else "",
+                        ])
+            st.caption("Cochez « Retenir » pour ajouter une ressource à votre fiche finale (phase 11).")
+            st.button("✅ Continuer vers les solutions France Mobilités →", type="primary", on_click=next_phase)
+        else:
+            st.button("Passer cette étape →", on_click=next_phase)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PHASE 8 — SOLUTIONS & ACTEURS (France Mobilités)
+# ════════════════════════════════════════════════════════════════════════════════
+elif st.session_state.phase == 8:
+    phase_header("9", "Solutions & Acteurs",
+                 "Solutions déjà déployées en France et les acteurs qui les portent.")
+
+    if require_problem():
+        st.markdown("""
+> [France Mobilités](https://www.francemobilites.fr/solutions) recense près de 900 solutions de mobilité
+> (services, outils, dispositifs) avec leur porteur, leur maturité et les territoires concernés.
+""")
+        if st.session_state.mots_cles:
+            keywords_editor()
+
+        if st.button("🔎 Rechercher sur France Mobilités", type="primary", disabled=not API_KEY):
+            if ensure_keywords():
+                try:
+                    with st.spinner("Chargement du catalogue France Mobilités…"):
+                        cands = sources.fm_candidates(st.session_state.mots_cles)
+                except Exception as e:  # noqa: BLE001
+                    show_source_error("France Mobilités", e)
+                    cands = None
+                if cands is not None:
+                    def fsum(c):
+                        return " | ".join(x for x in [
+                            c["titre"], c.get("sous_titre", "")[:160], c.get("description", "")[:200],
+                            "porteur : " + c.get("porteur", ""), "maturité : " + c.get("maturite", ""),
+                            "thèmes : " + ", ".join(c.get("themes", [])),
+                            "territoires : " + ", ".join(c.get("territoires", [])),
+                        ] if x)
+
+                    sel, synth = rank_with_claude(
+                        cands, "solutions France Mobilités", fsum, "jusqu'à 8",
+                        extra=" Privilégie la diversité des approches et des porteurs.")
+                    st.session_state.fm_results = sel
+                    st.session_state.fm_synthese = synth
+                    if not sel:
+                        st.warning("Aucune solution pertinente trouvée. Essayez d'ajuster les mots-clés.")
+
+        sel = st.session_state.fm_results
+        if sel:
+            st.divider()
+            if st.session_state.fm_synthese:
+                st.success(f"💡 {st.session_state.fm_synthese}")
+            st.subheader(f"🛠️ {len(sel)} solution(s) liée(s) à votre problème")
+            for item in sel:
+                show_item(item, "France Mobilités", [
+                    item.get("sous_titre", "")[:160],
+                    f"Porteur : {item.get('porteur', '')}" if item.get("porteur") else "",
+                    f"Maturité : {item.get('maturite', '')}" if item.get("maturite") else "",
+                    f"Mise à jour : {item.get('maj', '')}" if item.get("maj") else "",
+                ])
+
+            # Acteurs : les porteurs des solutions sélectionnées
+            acteurs = {}
+            for item in sel:
+                if item.get("porteur"):
+                    acteurs.setdefault(item["porteur"], {"url": item.get("porteur_url", ""), "solutions": []})
+                    acteurs[item["porteur"]]["solutions"].append(item["titre"])
+            if acteurs:
+                st.subheader("👥 Acteurs à contacter")
+                for nom, a in acteurs.items():
+                    lien = f"[{nom}]({a['url']})" if a["url"] else nom
+                    st.markdown(f"- **{lien}** — {', '.join(a['solutions'])}")
+            st.button("✅ Continuer vers les données ouvertes →", type="primary", on_click=next_phase)
+        else:
+            st.button("Passer cette étape →", on_click=next_phase)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PHASE 9 — DONNÉES OUVERTES (data.gouv.fr + INSEE)
+# ════════════════════════════════════════════════════════════════════════════════
+elif st.session_state.phase == 9:
+    phase_header("10", "Données Ouvertes",
+                 "Les données publiques pour objectiver le problème et suivre vos indicateurs.")
+
+    if require_problem():
+        kpis = [k.get("kpi", "") for k in (st.session_state.final_data or {}).get("indicateurs_succes", [])
+                if isinstance(k, dict)]
+        st.markdown("""
+> Des données ouvertes existent peut-être déjà pour **mesurer la situation de départ** et **suivre vos
+> indicateurs** : [data.gouv.fr](https://www.data.gouv.fr) (jeux de données et API) et le catalogue
+> [Melodi de l'INSEE](https://catalogue-donnees.insee.fr).
+""")
+        if st.session_state.mots_cles:
+            keywords_editor()
+
+        if st.button("🔎 Rechercher des données ouvertes", type="primary", disabled=not API_KEY):
+            if ensure_keywords():
+                queries = st.session_state.requetes_donnees or st.session_state.mots_cles[:5]
+                with st.spinner("Interrogation de data.gouv.fr et de l'INSEE…"):
+                    cands, errors = sources.opendata_candidates(queries, st.session_state.mots_cles)
+                for e in errors:
+                    st.warning(f"⚠️ Source inaccessible : {e}")
+
+                def dsum(c):
+                    return " | ".join(x for x in [
+                        c["source"], c["type"], c["titre"], "producteur : " + c.get("producteur", ""),
+                        c.get("description", "")[:200], "mise à jour : " + c.get("maj", ""),
+                        ("période : " + c["periode"]) if c.get("periode") else "",
+                    ] if x)
+
+                extra = ""
+                if kpis:
+                    extra = (" Indicateurs de succès visés par l'expert : " + "; ".join(kpis)
+                             + ". Dans 'comment_mobiliser', précise quel indicateur ou quel état des lieux "
+                               "la donnée permet de calculer.")
+                sel, synth = rank_with_claude(cands, "jeux de données et API ouverts", dsum,
+                                              "jusqu'à 8", extra=extra)
+                st.session_state.data_results = sel
+                st.session_state.data_synthese = synth
+                if not sel and not errors:
+                    st.warning("Aucune donnée pertinente trouvée. Essayez d'ajuster les requêtes.")
+
+        sel = st.session_state.data_results
+        if sel:
+            st.divider()
+            if st.session_state.data_synthese:
+                st.success(f"💡 {st.session_state.data_synthese}")
+            st.subheader(f"📊 {len(sel)} source(s) de données")
+            for item in sel:
+                show_item(item, item.get("source", "Données"), [
+                    f"{item.get('source', '')} · {item.get('type', '')}",
+                    f"Producteur : {item.get('producteur', '')}" if item.get("producteur") else "",
+                    f"Période : {item['periode']}" if item.get("periode") else "",
+                    f"Mise à jour : {item.get('maj', '')}" if item.get("maj") else "",
+                    f"Formats : {item['formats']}" if item.get("formats") else "",
+                ])
+            st.button("✅ Continuer vers la synthèse →", type="primary", on_click=next_phase)
+        else:
+            st.button("Passer cette étape →", on_click=next_phase)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PHASE 10 — SYNTHÈSE & EXPORT
+# ════════════════════════════════════════════════════════════════════════════════
+elif st.session_state.phase == 10:
+    phase_header("11", "Synthèse & Export",
+                 "Votre problème, et tout ce qui existe déjà pour vous aider à le traiter.")
+
+    if require_problem():
+        retenus = list(st.session_state.retenus.values())
+        if not retenus:
+            st.warning("Vous n'avez retenu aucune ressource. Revenez aux phases 8 à 10 et cochez "
+                       "« Retenir » sur celles qui vous intéressent.")
+        else:
+            groupes: dict[str, list] = {}
+            for r in retenus:
+                groupes.setdefault(r.get("origine", "Autre"), []).append(r)
+            st.subheader(f"📌 {len(retenus)} ressource(s) retenue(s)")
+            for origine, items in groupes.items():
+                st.markdown(f"**{origine}**")
+                for r in items:
+                    lien = f"[{r.get('titre', '')}]({r['url']})" if r.get("url") else r.get("titre", "")
+                    st.markdown(f"- {lien} — *{r.get('comment_mobiliser') or r.get('pourquoi', '')}*")
+
+            if st.button("🧭 Générer la feuille de route de mobilisation", type="primary",
+                         disabled=not API_KEY):
+                listing = "\n".join(
+                    f"- [{r.get('origine')}] {r.get('titre')} : {r.get('comment_mobiliser') or r.get('pourquoi', '')}"
+                    for r in retenus)
+                prompt = f"""{problem_brief()}
+
+Ressources existantes retenues par l'expert :
+{listing}
+
+Propose une feuille de route pour s'appuyer sur ces ressources plutôt que de repartir de zéro.
+Réponds UNIQUEMENT en JSON valide (aucun markdown) :
+- "message_cle" : 1-2 phrases — ce que l'existant change dans la manière d'aborder le problème
+- "actions" : 3 à 6 objets {{"action": "intitulé court", "ressources": "titres des ressources mobilisées", "detail": "1-2 phrases", "echeance": "ex : Mois 1"}}
+- "a_construire" : 1-3 phrases — ce qui reste à construire car rien n'existe (la vraie valeur ajoutée du projet)"""
+                with st.spinner("Rédaction de la feuille de route…"):
+                    data = parse_json(claude(prompt, max_tokens=2000))
+                if data:
+                    st.session_state.feuille_route = data
+
+            fr_ = st.session_state.feuille_route
+            if fr_:
+                st.divider()
+                st.subheader("🧭 Feuille de route")
+                if fr_.get("message_cle"):
+                    st.info(fr_["message_cle"])
+                for i, a in enumerate(fr_.get("actions", []), 1):
+                    if isinstance(a, dict):
+                        st.markdown(f"**{i}. {a.get('action', '')}** — ⏱ `{a.get('echeance', '')}`")
+                        st.caption(f"{a.get('detail', '')}  \n📎 {a.get('ressources', '')}")
+                if fr_.get("a_construire"):
+                    st.success(f"🏗️ **Ce qui reste à construire** : {fr_['a_construire']}")
+
+        # ── Export Word ──
+        st.divider()
+        st.subheader("📥 Exporter la fiche enrichie")
+        if st.button("📄 Générer la fiche Word (.docx)", use_container_width=True):
+            try:
+                from docx import Document as Doc
+                fd = st.session_state.final_data or {}
+                doc = Doc()
+                doc.add_heading("Fiche Problème enrichie", 0)
+                doc.add_paragraph(f"Générée le {datetime.now().strftime('%d/%m/%Y à %H:%M')}")
+                doc.add_heading("Le problème", level=1)
+                if st.session_state.hmw:
+                    doc.add_paragraph().add_run(st.session_state.hmw).bold = True
+                if fd.get("formulation_complete"):
+                    doc.add_paragraph(fd["formulation_complete"])
+                if st.session_state.reformulation:
+                    doc.add_paragraph(f"Problème général : {st.session_state.reformulation}")
+                kp = [k for k in fd.get("indicateurs_succes", []) if isinstance(k, dict)]
+                if kp:
+                    doc.add_heading("Indicateurs de succès", level=1)
+                    for k in kp:
+                        doc.add_paragraph(f"{k.get('kpi', '')} : {k.get('cible', '')} {k.get('unite', '')} "
+                                          f"— {k.get('echeance', '')}", style="List Bullet")
+                for titre_s, synth in [("Communs & ressources (wiki FabMob)", st.session_state.wiki_synthese),
+                                       ("Solutions France Mobilités", st.session_state.fm_synthese),
+                                       ("Données ouvertes", st.session_state.data_synthese)]:
+                    if synth:
+                        doc.add_heading(titre_s, level=2)
+                        doc.add_paragraph(synth)
+                if st.session_state.retenus:
+                    doc.add_heading("Ressources retenues", level=1)
+                    for r in st.session_state.retenus.values():
+                        p = doc.add_paragraph(style="List Bullet")
+                        p.add_run(f"[{r.get('origine', '')}] {r.get('titre', '')}").bold = True
+                        txt = r.get("comment_mobiliser") or r.get("pourquoi") or ""
+                        p.add_run(f" — {txt}\n{r.get('url', '')}")
+                fr_ = st.session_state.feuille_route
+                if fr_:
+                    doc.add_heading("Feuille de route de mobilisation", level=1)
+                    if fr_.get("message_cle"):
+                        doc.add_paragraph(fr_["message_cle"])
+                    for a in fr_.get("actions", []):
+                        if isinstance(a, dict):
+                            p = doc.add_paragraph(style="List Number")
+                            p.add_run(a.get("action", "")).bold = True
+                            p.add_run(f" ({a.get('echeance', '')}) — {a.get('detail', '')} "
+                                      f"Ressources : {a.get('ressources', '')}")
+                    if fr_.get("a_construire"):
+                        doc.add_heading("Ce qui reste à construire", level=2)
+                        doc.add_paragraph(fr_["a_construire"])
+                buf = io.BytesIO()
+                doc.save(buf)
+                st.download_button(
+                    "⬇️ Télécharger la fiche Word", data=buf.getvalue(),
+                    file_name=f"fiche_probleme_enrichie_{datetime.now().strftime('%Y%m%d_%H%M')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                )
+            except Exception as e:  # noqa: BLE001
+                st.error(f"Erreur génération DOCX : {e}")
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PIED DE PAGE COMMUN — navigation + sauvegarde (affiché à chaque phase)
+# ════════════════════════════════════════════════════════════════════════════════
+st.divider()
+_cur = st.session_state.phase
+f1, f2, f3 = st.columns([1, 1, 2])
+with f1:
+    st.button("◀ Étape précédente", disabled=_cur == 0, use_container_width=True,
+              on_click=set_phase, args=(_cur - 1,), key="back_footer")
+with f2:
+    if _cur < st.session_state.max_phase:
+        st.button("Étape suivante ▶", use_container_width=True,
+                  on_click=set_phase, args=(_cur + 1,), key="next_footer",
+                  help="Revenir à une étape déjà réalisée (vos résultats sont conservés).")
+with f3:
+    st.download_button(
+        "💾 Sauvegarder ma progression",
+        data=build_save(), file_name=save_filename(), mime="application/json",
+        use_container_width=True, key="save_footer",
+    )
+
+sidebar_save_slot.download_button(
+    "💾 Sauvegarder ma progression",
+    data=build_save(), file_name=save_filename(), mime="application/json",
+    use_container_width=True, key="save_sidebar",
+)
