@@ -27,6 +27,8 @@ WIKI_API = "https://wiki.lafabriquedesmobilites.fr/api.php"
 WIKI_BASE = "https://wiki.lafabriquedesmobilites.fr/wiki/"
 FM_API = "https://www.francemobilites.fr/api/v1/json/node/list/solution/all"
 FM_BASE = "https://www.francemobilites.fr"
+# Page d'origine du catalogue, indiquée en balise canonical (consigne de France Mobilités)
+FM_SOLUTIONS_PAGE = "https://www.francemobilites.fr/solutions"
 DATAGOUV_API = "https://www.data.gouv.fr/api/1/"
 MELODI_CATALOG = "https://api.insee.fr/melodi/catalog/all"
 
@@ -71,6 +73,45 @@ def norm(text: str) -> str:
     return " " + re.sub(r"[^a-z0-9]+", " ", t).strip() + " "
 
 
+STOPWORDS = set("""a au aux avec ce ces dans de des du en et la le les leur leurs l d un une pour par
+sur sous son sa ses ou ne pas plus moins tout tous toute toutes entre afin vers chez comme qui que quoi
+dont est sont etre faire mieux tres via selon lors peu""".split())
+
+
+def split_keywords(keywords: list[str]) -> list[str]:
+    """Transforme des expressions en mots-clés simples utilisables par la recherche.
+
+    « covoiturage domicile-travail en zone rurale » →
+    ["covoiturage", "domicile travail", "domicile", "travail", "zone", "rurale"].
+    Accepte aussi une chaîne unique séparée par des virgules, points-virgules ou retours à la ligne.
+    """
+    if isinstance(keywords, str):
+        keywords = [keywords]
+    raw = []
+    for k in keywords:
+        raw += [x.strip() for x in re.split(r"[,;\n]+", k or "") if x.strip()]
+    out: list[str] = []
+
+    def add(x):
+        if x and x not in out:
+            out.append(x)
+
+    for k in raw:
+        words = [w for w in norm(k).split() if len(w) >= 3 and w not in STOPWORDS]
+        if not words:
+            continue
+        if len(words) <= 2:
+            add(" ".join(words))          # expression courte gardée telle quelle
+        # Mots composés (« domicile-travail ») gardés ensemble, puis chaque mot seul
+        for part in re.split(r"\s+", k):
+            sub = [w for w in norm(part).split() if len(w) >= 3 and w not in STOPWORDS]
+            if len(sub) == 2:
+                add(" ".join(sub))
+        for w in words:
+            add(w)
+    return out
+
+
 def score_record(rec: dict, keywords: list[str]) -> float:
     """Score simple : présence de chaque mot-clé, pondérée selon le champ où il apparaît.
 
@@ -85,7 +126,8 @@ def score_record(rec: dict, keywords: list[str]) -> float:
         for txt, w in rec["_idx"].values():
             if k in txt:
                 best = max(best, w)
-        score += best
+        # Une expression de plusieurs mots trouvée telle quelle compte davantage
+        score += best * (1.5 if " " in k.strip() else 1.0)
     return score
 
 
@@ -93,6 +135,7 @@ def preselect(records: list[dict], keywords: list[str], n: int, min_score: float
               bonus: dict | None = None) -> list[dict]:
     """Garde les n fiches au meilleur score. `bonus` : {titre: points ajoutés}."""
     bonus = bonus or {}
+    keywords = split_keywords(keywords)
     scored = [(score_record(r, keywords) + bonus.get(r.get("titre"), 0.0), r) for r in records]
     scored = [x for x in scored if x[0] >= min_score]
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -201,7 +244,7 @@ def wiki_fulltext(keywords: list[str], limit: int = 30) -> dict[str, int]:
 
     hits: dict[str, int] = {}
     with ThreadPoolExecutor(max_workers=4) as ex:
-        for d in ex.map(one, keywords[:6]):
+        for d in ex.map(one, split_keywords(keywords)[:6]):
             for x in d.get("query", {}).get("search", []):
                 hits[x["title"]] = hits.get(x["title"], 0) + 1
     return hits
@@ -298,8 +341,24 @@ def fm_candidates(keywords: list[str], n: int = 30) -> list[dict]:
 # ════════════════════════════════════════════════════════════════════════════════
 # DONNÉES OUVERTES : DATA.GOUV.FR + INSEE (MELODI)
 # ════════════════════════════════════════════════════════════════════════════════
+def simplify_queries(queries: list[str], max_words: int = 2) -> list[str]:
+    """Requêtes courtes pour data.gouv.fr : la recherche exige que tous les mots soient présents,
+    donc une requête longue ne renvoie souvent rien."""
+    out = []
+    for q in split_keywords(queries) if isinstance(queries, str) else queries:
+        for part in re.split(r"[,;\n]+", q or ""):
+            words = [w for w in re.split(r"\s+", part.strip())
+                     if len(norm(w).strip()) >= 3 and norm(w).strip() not in STOPWORDS]
+            if words:
+                short = " ".join(words[:max_words])
+                if short.lower() not in (o.lower() for o in out):
+                    out.append(short)
+    return out
+
+
 def datagouv_search(queries: list[str], per_query: int = 8) -> list[dict]:
     """Recherche de jeux de données et d'API sur data.gouv.fr (API publique, sans clé)."""
+    queries = simplify_queries(queries)
     jobs = [(q, kind, path) for q in queries[:6]
             for kind, path in (("Jeu de données", "datasets/"), ("API", "dataservices/"))]
 
@@ -313,6 +372,11 @@ def datagouv_search(queries: list[str], per_query: int = 8) -> list[dict]:
     seen, out = set(), []
     with ThreadPoolExecutor(max_workers=6) as ex:
         results = list(ex.map(one, jobs))
+        # Repli : une requête de 2 mots sans résultat est relancée mot par mot
+        empty = {q for (q, kind, _), d in results if kind == "Jeu de données" and not d.get("data") and " " in q}
+        retry = [(w, "Jeu de données", "datasets/") for q in empty for w in q.split()
+                 if len(w) >= 3 and w.lower() not in STOPWORDS]
+        results += list(ex.map(one, retry))
     for (q, kind, _), d in results:
         for x in d.get("data", []):
             if x.get("id") in seen or x.get("archived") or x.get("deleted") or x.get("archived_at"):
