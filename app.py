@@ -7,6 +7,7 @@ import streamlit as st
 import requests
 import json
 import io
+import copy
 from datetime import datetime
 
 # ─── CONFIG PAGE ────────────────────────────────────────────────────────────────
@@ -78,6 +79,7 @@ CYNEFIN_INFO = {
 # ─── SESSION STATE ───────────────────────────────────────────────────────────────
 DEFAULTS = {
     "phase": 0,
+    "max_phase": 0,             # phase la plus avancée atteinte (pour la navigation)
     "doc_text": "",
     "sofia_data": None,
     "problem_input": "",
@@ -104,10 +106,15 @@ DEFAULTS = {
     "coherence_details": {},
     "hmw": "",
     "final_data": {},
+    "_synth_data": None,
+    "_sel_sig": None,
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
-        st.session_state[k] = v
+        st.session_state[k] = copy.deepcopy(v)
+
+# Clés techniques à conserver lors d'un Reset / d'une restauration
+_KEEP_KEYS = {"restore_file", "_restored_sig"}
 
 # ─── HELPERS ────────────────────────────────────────────────────────────────────
 
@@ -322,14 +329,71 @@ def score_emoji(s: int, max_s: int = 100) -> str:
     return "🟢" if pct >= 70 else "🟡" if pct >= 40 else "🔴"
 
 
+def set_phase(n: int):
+    """Change de phase (utilisable en callback on_click). Mémorise la phase max atteinte."""
+    n = max(0, min(int(n), len(PHASES) - 1))
+    st.session_state.phase = n
+    st.session_state.max_phase = max(st.session_state.get("max_phase", 0), n)
+
+
 def next_phase():
-    st.session_state.phase += 1
-    st.rerun()
+    set_phase(st.session_state.phase + 1)
 
 
 def go_phase(n: int):
-    st.session_state.phase = n
+    set_phase(n)
     st.rerun()
+
+
+# ─── SAUVEGARDE / RESTAURATION ──────────────────────────────────────────────────
+SAVE_APP_ID = "formulateur_strategique"
+
+
+def build_save() -> str:
+    """Sérialise toute la progression (toutes les phases) en JSON."""
+    state = {k: st.session_state.get(k, v) for k, v in DEFAULTS.items()}
+    payload = {
+        "app": SAVE_APP_ID,
+        "version": 2,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "phase_label": PHASES[st.session_state.phase][1],
+        "state": state,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+
+def save_filename() -> str:
+    num = PHASES[st.session_state.phase][0]
+    return f"sauvegarde_phase{num}_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
+
+
+def load_save(raw: bytes) -> str | None:
+    """Restaure une sauvegarde. Renvoie un message d'erreur, ou None si OK."""
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return "Fichier illisible : ce n'est pas un JSON valide."
+    if not isinstance(payload, dict) or payload.get("app") != SAVE_APP_ID \
+            or not isinstance(payload.get("state"), dict):
+        return ("Ce fichier n'est pas une sauvegarde de l'outil. Utilisez le bouton "
+                "« 💾 Sauvegarder ma progression » pour en créer une.")
+    state = payload["state"]
+    # On efface l'état courant (y compris les champs de saisie mémorisés)
+    for k in list(st.session_state.keys()):
+        if k not in _KEEP_KEYS:
+            del st.session_state[k]
+    for k, v in DEFAULTS.items():
+        st.session_state[k] = copy.deepcopy(state.get(k, v))
+    try:
+        phase = max(0, min(int(st.session_state.phase), len(PHASES) - 1))
+    except (TypeError, ValueError):
+        phase = 0
+    st.session_state.phase = phase
+    try:
+        st.session_state.max_phase = max(phase, min(int(st.session_state.max_phase), len(PHASES) - 1))
+    except (TypeError, ValueError):
+        st.session_state.max_phase = phase
+    return None
 
 
 # ─── SIDEBAR ────────────────────────────────────────────────────────────────────
@@ -345,27 +409,51 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### 📍 Progression")
+    st.caption("Cliquez sur une phase déjà atteinte pour y revenir.")
     for i, (num, name, _) in enumerate(PHASES):
-        if i < st.session_state.phase:
-            st.markdown(f"✅ **Phase {num}** – {name}")
-        elif i == st.session_state.phase:
+        if i == st.session_state.phase:
             st.markdown(f"▶️ **Phase {num} – {name}** ← ici")
+        elif i <= st.session_state.max_phase:
+            st.button(f"✅ Phase {num} – {name}", key=f"nav_{i}",
+                      on_click=set_phase, args=(i,), use_container_width=True)
         else:
             st.markdown(f"⬜ Phase {num} – {name}")
 
     st.divider()
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("◀ Retour", disabled=st.session_state.phase == 0, use_container_width=True):
-            st.session_state.phase -= 1
-            st.rerun()
+        st.button("◀ Retour", disabled=st.session_state.phase == 0, use_container_width=True,
+                  on_click=set_phase, args=(st.session_state.phase - 1,), key="back_sidebar")
     with col2:
         if st.button("🔄 Reset", use_container_width=True):
             for k in list(st.session_state.keys()):
-                del st.session_state[k]
+                if k not in _KEEP_KEYS:
+                    del st.session_state[k]
             for k, v in DEFAULTS.items():
-                st.session_state[k] = v
+                st.session_state[k] = copy.deepcopy(v)
             st.rerun()
+
+    st.divider()
+    st.markdown("### 💾 Sauvegarde")
+    st.caption(
+        "Téléchargez un fichier de sauvegarde pour reprendre plus tard "
+        "là où vous en êtes, sans tout refaire."
+    )
+    # Rempli en fin de script, pour que la sauvegarde contienne les dernières saisies
+    sidebar_save_slot = st.empty()
+
+    restore = st.file_uploader("📂 Reprendre une sauvegarde", type=["json"], key="restore_file")
+    if restore is not None:
+        sig = f"{restore.name}-{restore.size}"
+        if st.session_state.get("_restored_sig") != sig:
+            err = load_save(restore.getvalue())
+            if err:
+                st.error(err)
+            else:
+                st.session_state["_restored_sig"] = sig
+                st.rerun()
+        else:
+            st.success(f"Sauvegarde chargée : {restore.name}")
 
     st.divider()
     st.caption("Basé sur : Cynefin (Snowden), Problem Statement Canvas, JTBD, Double Diamant, HMW (IDEO), Frame Innovation (Dorst)")
@@ -803,7 +891,7 @@ Réponds UNIQUEMENT avec un JSON valide : {{ "technologies": [ ... ] }}"""
 # PHASE 3 — DÉCOMPOSITION
 # ════════════════════════════════════════════════════════════════════════════════
 elif st.session_state.phase == 3:
-    phase_header("2", "Décomposition", "Explorer les sous-problèmes possibles et choisir votre cible.")
+    phase_header("4", "Décomposition", "Explorer les sous-problèmes possibles et choisir votre cible.")
 
     st.info(f"**Problème général** : {st.session_state.reformulation}")
     st.markdown("""
@@ -1033,7 +1121,13 @@ Génère en JSON valide (aucun markdown) :
 
     elif nb_sel == 1:
         sp = sel_list[0]
-        st.session_state.selected_sub_problem = f"{sp.get('titre', '')} : {sp.get('description', '')}"
+        # On ne pré-remplit qu'au moment où la sélection change (sinon on écraserait
+        # les ajustements de l'expert, notamment en revenant sur cette étape)
+        if st.session_state.get("_sel_sig") != sp.get("id"):
+            st.session_state.selected_sub_problem = f"{sp.get('titre', '')} : {sp.get('description', '')}"
+            st.session_state["_sel_sig"] = sp.get("id")
+    else:
+        st.session_state["_sel_sig"] = None
 
     # ── Formulation manuelle (toujours disponible) ────────────────────────────
     st.subheader("✍️ Formulation finale — ajustez si nécessaire")
@@ -1136,21 +1230,22 @@ elif st.session_state.phase == 4:
             placeholder="Ex: Campagne de sensibilisation en 2021 → faible adoption car pas de levier économique associé..."
         )
 
+    # Enregistrement à chaque modification (pour ne rien perdre en revenant en arrière)
+    st.session_state.resources = {
+        "budget": budget_total, "budget_rh": budget_rh,
+        "budget_prestation": budget_prestation, "etp": etp,
+        "competences": competences, "competences_manquantes": competences_manquantes,
+    }
+    st.session_state.constraints = {
+        "duree_mois": duree_mois, "jalon_mois": jalon_mois,
+        "objectif_principal": objectif_principal, "objectif_secondaire": objectif_secondaire,
+        "partenaires_imposes": partenaires_imposes, "partenaires_potentiels": partenaires_potentiels,
+        "deja_tente": deja_tente,
+    }
+
     st.divider()
 
-    if st.button("✅ Valider et tester la cohérence →", type="primary"):
-        st.session_state.resources = {
-            "budget": budget_total, "budget_rh": budget_rh,
-            "budget_prestation": budget_prestation, "etp": etp,
-            "competences": competences, "competences_manquantes": competences_manquantes,
-        }
-        st.session_state.constraints = {
-            "duree_mois": duree_mois, "jalon_mois": jalon_mois,
-            "objectif_principal": objectif_principal, "objectif_secondaire": objectif_secondaire,
-            "partenaires_imposes": partenaires_imposes, "partenaires_potentiels": partenaires_potentiels,
-            "deja_tente": deja_tente,
-        }
-        next_phase()
+    st.button("✅ Valider et tester la cohérence →", type="primary", on_click=next_phase)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1602,6 +1697,12 @@ Génère en JSON valide (aucun markdown, aucun backtick) avec EXACTEMENT cette s
                 use_container_width=True,
             )
 
+        st.info(
+            "💾 **Conservez votre problème formulé** : cliquez sur « Sauvegarder ma progression » "
+            "ci-dessous. En rechargeant ce fichier plus tard (barre latérale → Reprendre une "
+            "sauvegarde), vous reviendrez directement ici, sans refaire les phases 1 à 6."
+        )
+
         st.divider()
         st.success("""
 ✅ **Félicitations !** Vous avez formulé votre "bon" sous-problème.
@@ -1609,3 +1710,31 @@ Génère en JSON valide (aucun markdown, aucun backtick) avec EXACTEMENT cette s
 Cette fiche est votre référence de projet. Si le score de cohérence est sous 70, revoyez
 le périmètre avant de vous lancer. Un bon problème bien formulé, c'est déjà 50% du travail.
         """)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PIED DE PAGE COMMUN — navigation + sauvegarde (affiché à chaque phase)
+# ════════════════════════════════════════════════════════════════════════════════
+st.divider()
+_cur = st.session_state.phase
+f1, f2, f3 = st.columns([1, 1, 2])
+with f1:
+    st.button("◀ Étape précédente", disabled=_cur == 0, use_container_width=True,
+              on_click=set_phase, args=(_cur - 1,), key="back_footer")
+with f2:
+    if _cur < st.session_state.max_phase:
+        st.button("Étape suivante ▶", use_container_width=True,
+                  on_click=set_phase, args=(_cur + 1,), key="next_footer",
+                  help="Revenir à une étape déjà réalisée (vos résultats sont conservés).")
+with f3:
+    st.download_button(
+        "💾 Sauvegarder ma progression",
+        data=build_save(), file_name=save_filename(), mime="application/json",
+        use_container_width=True, key="save_footer",
+    )
+
+sidebar_save_slot.download_button(
+    "💾 Sauvegarder ma progression",
+    data=build_save(), file_name=save_filename(), mime="application/json",
+    use_container_width=True, key="save_sidebar",
+)
