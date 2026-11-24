@@ -26,6 +26,15 @@ Dans les phases 8 à 10, l'outil extrait des mots-clés du problème (modifiable
 fiches correspondantes dans chaque source, puis Claude choisit les plus pertinentes et explique
 comment s'en servir. Cochez **Retenir** pour les garder dans la fiche finale.
 
+**Conseil** : des mots simples séparés par des virgules (*covoiturage, rural, autopartage*) donnent
+les meilleurs résultats. Une expression longue est découpée automatiquement en mots.
+
+## ✍️ Vous avez déjà un problème bien formulé ?
+
+Dès l'accueil, le bouton **« Saisir mon problème »** mène à l'étape 7. Collez-y votre problème
+(et, si vous le souhaitez, son contexte et vos indicateurs), puis lancez directement la recherche
+de communs, solutions, acteurs et données ouvertes, sans passer par les phases 1 à 6.
+
 ## 💾 Sauvegarder et reprendre
 
 - **💾 Sauvegarder ma progression** (en bas de chaque page et dans la barre latérale) télécharge un
@@ -65,6 +74,10 @@ WIKI_USER_AGENT = "nouveau-nom"
   Mobilités pèse environ 15 Mo : la première recherche prend quelques secondes de plus.
 - La présélection repose sur des mots-clés : une fiche mal décrite peut être manquée. Ajustez les
   mots-clés si les résultats semblent incomplets.
+- **France Mobilités** demande que tout site qui expose ses données indique, par une balise
+  `<link rel="canonical">`, l'URL de la page d'origine sur francemobilites.fr. L'outil ajoute cette
+  balise (vers https://www.francemobilites.fr/solutions) sur les pages qui affichent leurs
+  solutions, et chaque solution renvoie vers sa fiche d'origine.
 - Les pages « Connaissance » du wiki sont repérées par leur type de page (elles sont rangées dans la
   catégorie « Référentiel »).
 

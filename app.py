@@ -4,9 +4,11 @@ Outil Streamlit + Claude API
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import json
 import io
+import re
 import copy
 from datetime import datetime
 
@@ -125,6 +127,7 @@ DEFAULTS = {
     "feuille_route": {},        # synthèse finale générée en phase 11
     "_synth_data": None,
     "_sel_sig": None,
+    "_direct_entry": False,     # problème saisi directement en phase 7
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
@@ -502,6 +505,43 @@ def problem_brief() -> str:
     return "\n".join(parts)
 
 
+def reset_exploration():
+    """Nouveau problème : les mots-clés et résultats des phases 8 à 10 ne sont plus valables."""
+    for k in ("mots_cles", "requetes_donnees", "wiki_results", "wiki_synthese", "fm_results",
+              "fm_synthese", "data_results", "data_synthese", "feuille_route"):
+        st.session_state[k] = copy.deepcopy(DEFAULTS[k])
+
+
+def set_canonical(url: str | None):
+    """Ajoute (ou retire) la balise <link rel="canonical"> dans l'en-tête de la page.
+
+    Consigne de France Mobilités : tout site tiers qui expose leurs données doit indiquer,
+    par une balise canonical, l'URL de la page d'origine sur francemobilites.fr.
+    """
+    js_url = json.dumps(url or "")
+    script = f"""<script>
+    (function() {{
+      try {{
+        const doc = (window.parent && window.parent.document) || document;
+        let link = doc.head.querySelector('link[rel="canonical"][data-source="francemobilites"]');
+        const url = {js_url};
+        if (!url) {{ if (link) link.remove(); return; }}
+        if (!link) {{
+          link = doc.createElement('link');
+          link.setAttribute('rel', 'canonical');
+          link.setAttribute('data-source', 'francemobilites');
+          doc.head.appendChild(link);
+        }}
+        link.setAttribute('href', url);
+      }} catch (e) {{}}
+    }})();
+    </script>"""
+    try:
+        st.html(script, unsafe_allow_javascript=True)
+    except TypeError:  # anciennes versions de Streamlit
+        components.html(script, height=0)
+
+
 def require_problem() -> bool:
     if not st.session_state.hmw and not st.session_state.selected_sub_problem:
         st.warning("⚠️ Formulez d'abord votre problème (phase 7), ou rechargez une sauvegarde.")
@@ -518,8 +558,8 @@ def ensure_keywords(force: bool = False) -> bool:
 
 Pour rechercher ce qui existe déjà sur ce problème (communs, projets, solutions, acteurs, données ouvertes),
 fournis en JSON valide (aucun markdown) :
-- "mots_cles" : 10 à 15 mots-clés ou expressions courtes EN FRANÇAIS (1 à 3 mots chacun), du plus spécifique au plus général, avec les synonymes usuels du secteur (ex : "covoiturage", "autopartage", "zone peu dense", "rural", "transport à la demande"). Pas de mots vides ni de termes trop génériques comme "mobilité" seul.
-- "requetes_donnees" : 4 à 6 requêtes courtes (2-4 mots) pour chercher des jeux de données ouverts utiles pour mesurer ce problème et ses indicateurs (ex : "aires de covoiturage", "déplacements domicile travail", "offre transport en commun")."""
+- "mots_cles" : 10 à 15 mots-clés SIMPLES EN FRANÇAIS, un seul mot de préférence (deux au maximum, jamais de phrase), tels qu'on les taperait dans un moteur de recherche. Du plus spécifique au plus général, avec les synonymes usuels du secteur. Exemple : ["covoiturage", "autopartage", "rural", "périurbain", "domicile-travail", "navette", "autostop"]. Pas de mots vides, pas de termes trop génériques comme "mobilité" seul.
+- "requetes_donnees" : 4 à 6 requêtes de 1 ou 2 mots pour chercher des jeux de données ouverts utiles pour mesurer ce problème et ses indicateurs. Exemple : ["covoiturage", "aires covoiturage", "domicile-travail", "transport public"]."""
     with st.spinner("Extraction des mots-clés du problème…"):
         data = parse_json(claude(prompt, max_tokens=800))
     if not data:
@@ -529,19 +569,34 @@ fournis en JSON valide (aucun markdown) :
     return bool(st.session_state.mots_cles)
 
 
-def keywords_editor():
+def _split_list(txt: str) -> list[str]:
+    """Liste saisie par l'expert : virgules, points-virgules ou retours à la ligne."""
+    out = []
+    for k in re.split(r"[,;\n]+", txt or ""):
+        k = k.strip()
+        if k and k.lower() not in (o.lower() for o in out):
+            out.append(k)
+    return out
+
+
+def keywords_editor(show_queries: bool = False):
     """Affiche les mots-clés, modifiables par l'expert."""
-    with st.expander("🔑 Mots-clés utilisés pour la recherche (modifiables)", expanded=False):
+    with st.expander("🔑 Mots-clés utilisés pour la recherche (modifiables)",
+                     expanded=bool(st.session_state.mots_cles)):
+        st.caption("Des **mots simples séparés par des virgules** donnent les meilleurs résultats "
+                   "(ex : *covoiturage, rural, autopartage*). Une expression longue est découpée "
+                   "automatiquement en mots. Laissez vide pour que Claude les propose.")
         txt = st.text_area(
             "Mots-clés (séparés par des virgules)",
             value=", ".join(st.session_state.mots_cles), height=80,
         )
-        st.session_state.mots_cles = [k.strip() for k in txt.split(",") if k.strip()]
-        txt2 = st.text_area(
-            "Requêtes de recherche de données (séparées par des virgules)",
-            value=", ".join(st.session_state.requetes_donnees), height=60,
-        )
-        st.session_state.requetes_donnees = [k.strip() for k in txt2.split(",") if k.strip()]
+        st.session_state.mots_cles = _split_list(txt)
+        if show_queries:
+            txt2 = st.text_area(
+                "Recherches de données ouvertes (1 ou 2 mots chacune, séparées par des virgules)",
+                value=", ".join(st.session_state.requetes_donnees), height=60,
+            )
+            st.session_state.requetes_donnees = _split_list(txt2)
         if st.button("🔄 Régénérer les mots-clés avec Claude", disabled=not API_KEY):
             if ensure_keywords(force=True):
                 st.rerun()
@@ -628,6 +683,17 @@ if st.session_state.phase == 0:
 > Beaucoup d'experts pensent avoir un problème clair. Ce qu'ils ont, c'est souvent **une intention**.
 > Cette phase va révéler les zones d'ombre avant d'aller plus loin.
 """)
+
+    def _go_direct():
+        st.session_state["_direct_entry"] = True
+        set_phase(6)
+
+    c_info, c_btn = st.columns([3, 1])
+    with c_info:
+        st.info("**Vous avez déjà un problème bien formulé ?** Passez directement à l'étape 7 pour le "
+                "saisir et chercher les communs, solutions, acteurs et données ouvertes associés.")
+    with c_btn:
+        st.button("✍️ Saisir mon problème →", on_click=_go_direct, use_container_width=True)
 
     # ── Upload documents ──
     st.subheader("📎 Documents de contexte")
@@ -1531,13 +1597,52 @@ Réponds UNIQUEMENT en JSON valide. Aucun markdown, aucun backtick.
 elif st.session_state.phase == 6:
     phase_header("7", "Formulation Finale", "Votre 'bon' sous-problème formulé, documenté et prêt à l'action.")
 
-    score = st.session_state.coherence_score or 0
-    emoji = score_emoji(score)
+    # ── Raccourci : l'expert a déjà un problème bien formulé ──
+    with st.expander("✍️ Vous avez déjà un problème bien formulé ? Saisissez-le directement",
+                     expanded=st.session_state.get("_direct_entry", False)):
+        st.caption("Pour chercher directement les communs, solutions, acteurs et données ouvertes "
+                   "liés à votre problème, sans passer par les phases 1 à 6.")
+        direct_pb = st.text_area(
+            "Votre problème",
+            value=st.session_state.hmw if st.session_state.get("_direct_entry") else "",
+            height=120,
+            placeholder="Ex : Comment pourrions-nous doubler le covoiturage domicile-travail dans "
+                        "les territoires ruraux du Grand Est d'ici 2027 ?",
+        )
+        direct_ctx = st.text_area(
+            "Contexte (facultatif) : territoire, public, contraintes…", height=80,
+            value=(st.session_state.final_data or {}).get("contexte", "") if st.session_state.get("_direct_entry") else "",
+        )
+        direct_kpis = st.text_area(
+            "Indicateurs de succès (facultatif, un par ligne)", height=80,
+            placeholder="Ex : Nombre de trajets covoiturés par mois\nPart modale de la voiture solo",
+        )
+        if st.button("🔎 Utiliser ce problème et chercher des ressources →", type="primary",
+                     disabled=not direct_pb.strip()):
+            st.session_state.hmw = direct_pb.strip()
+            st.session_state.final_data = {
+                "formulation_complete": (direct_pb.strip() + ("\n\nContexte : " + direct_ctx.strip()
+                                                             if direct_ctx.strip() else "")),
+                "contexte": direct_ctx.strip(),
+                "indicateurs_succes": [{"kpi": k} for k in _split_list(direct_kpis.replace(",", " "))
+                                       if k] if direct_kpis.strip() else [],
+            }
+            if not st.session_state.selected_sub_problem:
+                st.session_state.selected_sub_problem = direct_pb.strip()
+            st.session_state["_direct_entry"] = True
+            reset_exploration()
+            set_phase(7)
+            st.rerun()
 
-    _, mid, _ = st.columns([1, 2, 1])
-    with mid:
-        st.metric(f"{emoji} Score de cohérence final", f"{score}/100",
-                  delta=st.session_state.coherence_details.get("verdict", ""))
+    if st.session_state.coherence_score is not None:
+        score = st.session_state.coherence_score or 0
+        emoji = score_emoji(score)
+        _, mid, _ = st.columns([1, 2, 1])
+        with mid:
+            st.metric(f"{emoji} Score de cohérence final", f"{score}/100",
+                      delta=st.session_state.coherence_details.get("verdict", ""))
+    else:
+        score = 0
 
     st.divider()
 
@@ -1579,6 +1684,8 @@ Génère en JSON valide (aucun markdown, aucun backtick) avec EXACTEMENT cette s
         if data:
             st.session_state.hmw = data.get("hmw", "")
             st.session_state.final_data = data
+            st.session_state["_direct_entry"] = False
+            reset_exploration()
 
     if st.session_state.hmw:
         fd = st.session_state.final_data
@@ -1876,8 +1983,7 @@ elif st.session_state.phase == 7:
 > recense des **communs** (logiciels, données, méthodes réutilisables), des **projets**, des **acteurs**
 > et des **connaissances**. Cette phase repère ceux qui concernent votre problème.
 """)
-        if st.session_state.mots_cles:
-            keywords_editor()
+        keywords_editor()
 
         if st.button("🔎 Rechercher dans le wiki", type="primary", disabled=not API_KEY):
             if ensure_keywords():
@@ -1944,8 +2050,7 @@ elif st.session_state.phase == 8:
 > [France Mobilités](https://www.francemobilites.fr/solutions) recense près de 900 solutions de mobilité
 > (services, outils, dispositifs) avec leur porteur, leur maturité et les territoires concernés.
 """)
-        if st.session_state.mots_cles:
-            keywords_editor()
+        keywords_editor()
 
         if st.button("🔎 Rechercher sur France Mobilités", type="primary", disabled=not API_KEY):
             if ensure_keywords():
@@ -1978,6 +2083,8 @@ elif st.session_state.phase == 8:
             if st.session_state.fm_synthese:
                 st.success(f"💡 {st.session_state.fm_synthese}")
             st.subheader(f"🛠️ {len(sel)} solution(s) liée(s) à votre problème")
+            st.caption("Source : [France Mobilités](https://www.francemobilites.fr/solutions). "
+                       "Chaque titre renvoie vers la fiche d'origine sur francemobilites.fr.")
             for item in sel:
                 show_item(item, "France Mobilités", [
                     item.get("sous_titre", "")[:160],
@@ -2017,8 +2124,7 @@ elif st.session_state.phase == 9:
 > indicateurs** : [data.gouv.fr](https://www.data.gouv.fr) (jeux de données et API) et le catalogue
 > [Melodi de l'INSEE](https://catalogue-donnees.insee.fr).
 """)
-        if st.session_state.mots_cles:
-            keywords_editor()
+        keywords_editor(show_queries=True)
 
         if st.button("🔎 Rechercher des données ouvertes", type="primary", disabled=not API_KEY):
             if ensure_keywords():
@@ -2187,6 +2293,14 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
 # ════════════════════════════════════════════════════════════════════════════════
 # PIED DE PAGE COMMUN — navigation + sauvegarde (affiché à chaque phase)
 # ════════════════════════════════════════════════════════════════════════════════
+# Balise canonical vers France Mobilités sur les pages qui affichent leurs solutions
+_fm_shown = (
+    (st.session_state.phase == 8 and st.session_state.fm_results)
+    or (st.session_state.phase == 10
+        and any(r.get("origine") == "France Mobilités" for r in st.session_state.retenus.values()))
+)
+set_canonical(sources.FM_SOLUTIONS_PAGE if _fm_shown else None)
+
 st.divider()
 _cur = st.session_state.phase
 f1, f2, f3 = st.columns([1, 1, 2])
