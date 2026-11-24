@@ -387,17 +387,54 @@ def save_filename() -> str:
     return f"sauvegarde_phase{num}_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
 
 
+def export_to_state(payload: dict) -> dict | None:
+    """Convertit un fichier « Exporter en JSON » de l'étape 7 en état de l'outil.
+
+    Ce fichier contient le problème formulé mais pas tout le travail des phases 1 à 6 :
+    on reprend donc à l'étape 7, d'où l'on peut lancer la recherche de ressources.
+    """
+    if not isinstance(payload, dict) or not (
+            payload.get("formulation_hmw") or payload.get("formulation_complete")):
+        return None
+    coh = payload.get("coherence") or {}
+    details = dict(coh.get("detail") or {})
+    if coh.get("verdict"):
+        details["verdict"] = coh["verdict"]
+    return {
+        "phase": 6,
+        "max_phase": 6,
+        "reformulation": payload.get("probleme_general") or "",
+        "selected_sub_problem": payload.get("sous_probleme_retenu") or "",
+        "hmw": payload.get("formulation_hmw") or payload.get("formulation_complete") or "",
+        "final_data": {
+            "hmw": payload.get("formulation_hmw") or "",
+            "formulation_complete": payload.get("formulation_complete") or "",
+            "indicateurs_succes": payload.get("indicateurs_succes") or [],
+            "prochaines_etapes": payload.get("prochaines_etapes") or [],
+            "risques_principaux": payload.get("risques") or payload.get("risques_principaux") or [],
+            "questions_restantes": payload.get("questions_restantes") or [],
+        },
+        "coherence_score": coh.get("score"),
+        "coherence_details": details,
+        "resources": payload.get("ressources") or {},
+        "constraints": payload.get("contraintes") or {},
+    }
+
+
 def load_save(raw: bytes) -> str | None:
-    """Restaure une sauvegarde. Renvoie un message d'erreur, ou None si OK."""
+    """Restaure une sauvegarde (ou un export JSON de l'étape 7). Renvoie une erreur, ou None si OK."""
     try:
         payload = json.loads(raw.decode("utf-8"))
     except Exception:
         return "Fichier illisible : ce n'est pas un JSON valide."
-    if not isinstance(payload, dict) or payload.get("app") != SAVE_APP_ID \
-            or not isinstance(payload.get("state"), dict):
-        return ("Ce fichier n'est pas une sauvegarde de l'outil. Utilisez le bouton "
-                "« 💾 Sauvegarder ma progression » pour en créer une.")
-    state = payload["state"]
+    if isinstance(payload, dict) and payload.get("app") == SAVE_APP_ID \
+            and isinstance(payload.get("state"), dict):
+        state = payload["state"]
+    else:
+        state = export_to_state(payload)
+        if state is None:
+            return ("Ce fichier n'est ni une sauvegarde de l'outil, ni un export de l'étape 7. "
+                    "Utilisez le bouton « 💾 Sauvegarder ma progression » pour en créer une.")
     # On efface l'état courant (y compris les champs de saisie mémorisés)
     for k in list(st.session_state.keys()):
         if k not in _KEEP_KEYS:
@@ -462,7 +499,9 @@ with st.sidebar:
     # Rempli en fin de script, pour que la sauvegarde contienne les dernières saisies
     sidebar_save_slot = st.empty()
 
-    restore = st.file_uploader("📂 Reprendre une sauvegarde", type=["json"], key="restore_file")
+    restore = st.file_uploader("📂 Reprendre une sauvegarde", type=["json"], key="restore_file",
+                               help="Une sauvegarde de progression, ou un fichier « Exporter en JSON » "
+                                    "de l'étape 7 (vous reprenez alors au problème formulé).")
     if restore is not None:
         sig = f"{restore.name}-{restore.size}"
         if st.session_state.get("_restored_sig") != sig:

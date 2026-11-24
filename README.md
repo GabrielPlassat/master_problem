@@ -41,6 +41,8 @@ de communs, solutions, acteurs et données ouvertes, sans passer par les phases 
   fichier `.json` avec tout votre travail.
 - **📂 Reprendre une sauvegarde** (barre latérale) recharge ce fichier et vous ramène à l'étape où
   vous étiez, par exemple directement au problème formulé en phase 7.
+- Le fichier **« Exporter en JSON »** de l'étape 7 est aussi accepté : vous reprenez au problème
+  formulé, prêt pour la recherche de ressources.
 - Les phases déjà atteintes sont cliquables dans la barre latérale pour revenir en arrière.
 
 ---
