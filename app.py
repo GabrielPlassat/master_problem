@@ -491,17 +491,22 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.markdown("### 💾 Sauvegarde")
+    st.markdown("### 💾 Sauvegarder")
     st.caption(
-        "Téléchargez un fichier de sauvegarde pour reprendre plus tard "
-        "là où vous en êtes, sans tout refaire."
+        "Téléchargez un fichier qui contient tout votre travail, pour le reprendre plus tard "
+        "sans tout refaire."
     )
     # Rempli en fin de script, pour que la sauvegarde contienne les dernières saisies
     sidebar_save_slot = st.empty()
 
-    restore = st.file_uploader("📂 Reprendre une sauvegarde", type=["json"], key="restore_file",
-                               help="Une sauvegarde de progression, ou un fichier « Exporter en JSON » "
-                                    "de l'étape 7 (vous reprenez alors au problème formulé).")
+    st.markdown("### 📂 Reprendre un travail")
+    st.caption(
+        "**Déposez ici votre fichier de sauvegarde** (.json) : l'outil vous ramène directement "
+        "à l'étape où vous vous étiez arrêté. Le fichier « Exporter en JSON » de l'étape 7 "
+        "fonctionne aussi : vous reprenez alors au problème formulé."
+    )
+    restore = st.file_uploader("Fichier de sauvegarde à reprendre", type=["json"], key="restore_file",
+                               label_visibility="collapsed")
     if restore is not None:
         sig = f"{restore.name}-{restore.size}"
         if st.session_state.get("_restored_sig") != sig:
@@ -1992,8 +1997,8 @@ Génère en JSON valide (aucun markdown, aucun backtick) avec EXACTEMENT cette s
 
         st.info(
             "💾 **Conservez votre problème formulé** : cliquez sur « Sauvegarder ma progression » "
-            "ci-dessous. En rechargeant ce fichier plus tard (barre latérale → Reprendre une "
-            "sauvegarde), vous reviendrez directement ici, sans refaire les phases 1 à 6."
+            "ci-dessous. En rechargeant ce fichier plus tard (barre latérale → Reprendre un "
+            "travail), vous reviendrez directement ici, sans refaire les phases 1 à 6."
         )
 
         st.divider()
