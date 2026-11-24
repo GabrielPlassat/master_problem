@@ -1,73 +1,76 @@
-# 🎯 L'Art de Problématiser — README
+# 🌿 Formulateur Stratégique — Transition Écologique
 
-Outil interactif pour aider des experts à mieux poser leur problème,  
-dans une perspective systémique, avant de chercher des solutions.
-
----
-
-## 🚀 Déploiement sur Streamlit Cloud (recommandé)
-
-1. **Créez un nouveau repo GitHub** (public ou privé)
-2. **Déposez** `app.py` et `requirements.txt` à la racine du repo
-3. **Allez sur** [share.streamlit.io](https://share.streamlit.io)
-4. **Connectez votre repo GitHub** et sélectionnez `app.py` comme fichier principal
-5. **Ajoutez votre clé API Anthropic** dans les secrets Streamlit :
-   - Dans Streamlit Cloud → votre app → Settings → Secrets
-   - Ajoutez : `ANTHROPIC_API_KEY = "sk-ant-..."`
-6. Cliquez **Deploy** — c'est tout !
+Outil Streamlit qui aide un expert à **bien poser son problème** avant de chercher des solutions,
+puis à **repérer ce qui existe déjà** (communs, solutions, acteurs, données ouvertes) pour ne pas
+repartir de zéro.
 
 ---
 
-## 💻 Lancement local (optionnel)
+## 📐 Les 11 phases
 
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
+| Phase | Nom | Ce qu'elle fait |
+|-------|-----|-----------------|
+| 1 | Ancrage | Décrire le problème, avec des documents (PDF, Word, rapport SofIA) |
+| 2 | Miroir des Impossibles | Cas historiques où les experts se sont trompés |
+| 3 | Scout Technologique | Technologies venues d'autres domaines |
+| 4 | Décomposition | Choisir un sous-problème |
+| 5 | Ressources & Contraintes | Budget, équipe, délais, objectifs |
+| 6 | Test de Cohérence | Le sous-problème est-il à votre portée ? |
+| 7 | Formulation Finale | « Comment pourrions-nous… », indicateurs, risques |
+| 8 | Communs & Ressources | Communs, projets, acteurs et connaissances du [wiki de la Fabrique des Mobilités](https://wiki.lafabriquedesmobilites.fr) |
+| 9 | Solutions & Acteurs | Solutions recensées par [France Mobilités](https://www.francemobilites.fr/solutions) et leurs porteurs |
+| 10 | Données Ouvertes | Jeux de données et API de [data.gouv.fr](https://www.data.gouv.fr), catalogue [Melodi de l'INSEE](https://catalogue-donnees.insee.fr) |
+| 11 | Synthèse & Export | Ressources retenues, feuille de route, fiche Word |
+
+Dans les phases 8 à 10, l'outil extrait des mots-clés du problème (modifiables), présélectionne les
+fiches correspondantes dans chaque source, puis Claude choisit les plus pertinentes et explique
+comment s'en servir. Cochez **Retenir** pour les garder dans la fiche finale.
+
+## 💾 Sauvegarder et reprendre
+
+- **💾 Sauvegarder ma progression** (en bas de chaque page et dans la barre latérale) télécharge un
+  fichier `.json` avec tout votre travail.
+- **📂 Reprendre une sauvegarde** (barre latérale) recharge ce fichier et vous ramène à l'étape où
+  vous étiez, par exemple directement au problème formulé en phase 7.
+- Les phases déjà atteintes sont cliquables dans la barre latérale pour revenir en arrière.
 
 ---
 
-## 🔑 Configuration de la clé API Anthropic
+## 🚀 Déploiement sur Streamlit Cloud
 
-L'étape finale (Portrait du Problème) utilise l'API Claude pour générer une synthèse.
+1. Sur [share.streamlit.io](https://share.streamlit.io), connectez ce dépôt et choisissez `app.py`.
+2. Dans **Settings → Secrets**, ajoutez la clé de l'API Claude :
+   ```toml
+   ANTHROPIC_API_KEY = "sk-ant-..."
+   ```
+3. Cliquez sur **Deploy**.
 
-**Pour Streamlit Cloud :** Ajoutez dans Settings → Secrets :
+Option : le wiki de la Fabrique des Mobilités n'accepte que les robots autorisés. L'outil utilise
+par défaut le nom autorisé `XD-Chatbot`. S'il change, ajoutez dans les secrets :
 ```toml
-ANTHROPIC_API_KEY = "sk-ant-votre-clé-ici"
+WIKI_USER_AGENT = "nouveau-nom"
 ```
 
-**Pour un test local sans clé :** L'outil fonctionne entièrement sans API jusqu'à l'étape 8.
-La génération du portrait sera simplement désactivée.
+## 📁 Fichiers
+
+| Fichier | Rôle |
+|---------|------|
+| `app.py` | L'application (toutes les phases) |
+| `sources.py` | La connexion au wiki, à France Mobilités, à data.gouv.fr et à l'INSEE |
+| `requirements.txt` | Les bibliothèques Python nécessaires |
+
+## ⚠️ Limites à connaître
+
+- Les sources sont rechargées au plus une fois par jour (mise en cache). Le catalogue France
+  Mobilités pèse environ 15 Mo : la première recherche prend quelques secondes de plus.
+- La présélection repose sur des mots-clés : une fiche mal décrite peut être manquée. Ajustez les
+  mots-clés si les résultats semblent incomplets.
+- Les pages « Connaissance » du wiki sont repérées par leur type de page (elles sont rangées dans la
+  catégorie « Référentiel »).
 
 ---
 
-## 📐 Structure de l'outil
+## 📚 Références intégrées
 
-| Étape | Nom | Zoom |
-|-------|-----|------|
-| 0 | Accueil & contexte | — |
-| 1 | Le Système Producteur | 🌍 Global |
-| 2 | Cartographie des Acteurs | 🔍 Local |
-| 3 | Les 5 Pourquoi Systémiques | 🔄 Aller-retour |
-| 4 | Positionnement Cynefin | 🌍 Global |
-| 5 | Carte des Tensions | 🔄 Aller-retour |
-| 6 | Test du Fantôme | 🔄 Aller-retour |
-| 7 | Évaluation du Problème | 🔍 Local |
-| 8 | Portrait du Problème | 🌍 Global |
-
----
-
-## 📚 Références principales intégrées
-
-- **Marty Cagan** — *Inspired* (2018)
-- **Donella Meadows** — *Thinking in Systems* (2008)
-- **Peter Senge** — *La Cinquième Discipline* (1990)
-- **Dave Snowden** — Cadre Cynefin (1999)
-- **Kees Dorst** — *Frame Innovation* (2015)
-- **Rittel & Webber** — Wicked Problems (1973)
-- **Marius Ursache** — Problem Statement Canvas
-- **Tony Ulwick** — Jobs-to-be-Done
-
----
-
-*Outil conçu pour des experts de la transition écologique et de l'innovation systémique.*
+Cynefin (Snowden), Problem Statement Canvas, Jobs-to-be-Done, Double Diamant, « How Might We » (IDEO),
+Frame Innovation (Dorst), *Inspired* (Cagan).
