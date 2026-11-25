@@ -74,7 +74,8 @@ PHASES = [
     ("8", "Communs & Ressources",      "Ce qui existe déjà sur le wiki de la Fabrique des Mobilités"),
     ("9", "Solutions & Acteurs",       "Solutions déjà déployées, recensées par France Mobilités"),
     ("10", "Données Ouvertes",         "Données pour mesurer et piloter (data.gouv.fr, INSEE)"),
-    ("11", "Synthèse & Export",        "Votre fiche enrichie, prête à partager"),
+    ("11", "Financements",             "Aides publiques ouvertes (Aides-territoires, Mission Transition Écologique)"),
+    ("12", "Synthèse & Export",        "Votre fiche enrichie, prête à partager"),
 ]
 
 CYNEFIN_INFO = {
@@ -115,7 +116,7 @@ DEFAULTS = {
     "hmw": "",
     "final_data": {},
     # Phases 8 à 11 — explorer ce qui existe déjà
-    "mots_cles": [],            # mots-clés du problème (partagés par les phases 8 à 10)
+    "mots_cles": [],            # mots-clés du problème (partagés par les phases 8 à 11)
     "requetes_donnees": [],     # requêtes de recherche de données ouvertes
     "wiki_results": {},         # {type: [fiches classées par Claude]}
     "wiki_synthese": "",
@@ -123,6 +124,10 @@ DEFAULTS = {
     "fm_synthese": "",
     "data_results": [],         # jeux de données classés
     "data_synthese": "",
+    "fin_results": [],          # aides financières classées par Claude
+    "fin_synthese": "",
+    "fin_porteur": "Tous types de porteurs",
+    "fin_territoire": "",
     "retenus": {},              # {id: fiche} — ressources retenues par l'expert
     "feuille_route": {},        # synthèse finale générée en phase 11
     "_synth_data": None,
@@ -550,9 +555,10 @@ def problem_brief() -> str:
 
 
 def reset_exploration():
-    """Nouveau problème : les mots-clés et résultats des phases 8 à 10 ne sont plus valables."""
+    """Nouveau problème : les mots-clés et résultats des phases 8 à 11 ne sont plus valables."""
     for k in ("mots_cles", "requetes_donnees", "wiki_results", "wiki_synthese", "fm_results",
-              "fm_synthese", "data_results", "data_synthese", "feuille_route"):
+              "fm_synthese", "data_results", "data_synthese", "fin_results", "fin_synthese",
+              "feuille_route"):
         st.session_state[k] = copy.deepcopy(DEFAULTS[k])
 
 
@@ -2211,22 +2217,128 @@ elif st.session_state.phase == 9:
                     f"Mise à jour : {item.get('maj', '')}" if item.get("maj") else "",
                     f"Formats : {item['formats']}" if item.get("formats") else "",
                 ])
+            st.button("✅ Continuer vers les financements →", type="primary", on_click=next_phase)
+        else:
+            st.button("Passer cette étape →", on_click=next_phase)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PHASE 10 — FINANCEMENTS (Aides-territoires + Mission Transition Écologique)
+# ════════════════════════════════════════════════════════════════════════════════
+elif st.session_state.phase == 10:
+    phase_header("11", "Financements",
+                 "Les aides publiques ouvertes qui peuvent financer votre projet.")
+
+    if require_problem():
+        st.markdown("""
+> [Aides-territoires](https://aides-territoires.beta.gouv.fr) recense près de 3 000 aides publiques
+> (État, ADEME, Régions, Départements, agences de l'eau, fonds européens…), surtout pour les
+> collectivités. [Mission Transition Écologique](https://mission-transition-ecologique.beta.gouv.fr)
+> complète avec environ 200 aides pour les entreprises.
+""")
+        if not sources.aides_territoires_key():
+            st.warning("⚠️ Clé Aides-territoires absente : ajoutez `AIDES_TERRITOIRES_API_KEY` dans les "
+                       "secrets Streamlit. Seules les aides Mission Transition Écologique seront cherchées.")
+        keywords_editor()
+
+        porteurs = list(sources.AT_AUDIENCES)
+        c1, c2 = st.columns(2)
+        with c1:
+            porteur = st.selectbox(
+                "Qui porte le projet ?", porteurs,
+                index=porteurs.index(st.session_state.fin_porteur)
+                if st.session_state.fin_porteur in porteurs else 0,
+            )
+            st.session_state.fin_porteur = porteur
+        with c2:
+            territoire = st.text_input(
+                "Territoire (facultatif) : département, région ou numéro",
+                value=st.session_state.fin_territoire,
+                placeholder="Ex : Seine-et-Marne, Occitanie, 77…",
+            )
+            st.session_state.fin_territoire = territoire
+        st.caption("Les aides nationales sont toujours incluses ; le territoire ajoute les aides locales "
+                   "qui le couvrent.")
+
+        if st.button("🔎 Rechercher des financements", type="primary", disabled=not API_KEY):
+            if ensure_keywords():
+                perimeter = None
+                if territoire.strip():
+                    try:
+                        perimeter = sources.at_find_perimeter(territoire)
+                    except Exception as e:  # noqa: BLE001
+                        st.warning(f"⚠️ Territoire non vérifié : {e}")
+                    if perimeter:
+                        st.caption(f"📍 Territoire retenu : {perimeter['name']} ({perimeter['scale']})")
+                    elif sources.aides_territoires_key():
+                        st.warning(f"Territoire « {territoire} » introuvable : recherche sur toute la France.")
+                with st.spinner("Recherche des aides ouvertes…"):
+                    cands, errors = sources.funding_candidates(
+                        st.session_state.mots_cles, sources.AT_AUDIENCES[porteur], perimeter,
+                        include_mte=porteur in ("Tous types de porteurs", "Entreprise"))
+                for e in errors:
+                    st.warning(f"⚠️ {e}")
+
+                def fsum(c):
+                    return " | ".join(x for x in [
+                        c["source"], c["titre"], c.get("description", "")[:220],
+                        "financeurs : " + ", ".join(c.get("financeurs", [])[:3]),
+                        "nature : " + c.get("nature", ""),
+                        ("territoire : " + c["territoire"]) if c.get("territoire") else "",
+                        ("bénéficiaires : " + ", ".join(c["publics"][:4])) if c.get("publics") else "",
+                        ("date limite : " + c["date_limite"]) if c.get("date_limite") else "",
+                    ] if x)
+
+                extra = (f" Le porteur du projet est : {porteur}. Écarte les aides auxquelles il n'est "
+                         "pas éligible. Dans 'comment_mobiliser', indique quelle partie du projet l'aide "
+                         "peut financer (étude, investissement, animation…).")
+                sel, synth = rank_with_claude(cands, "aides financières", fsum, "jusqu'à 10",
+                                              extra=extra)
+                st.session_state.fin_results = sel
+                st.session_state.fin_synthese = synth
+                if not sel and cands:
+                    st.warning("Aucune aide jugée pertinente. Essayez d'élargir les mots-clés ou le porteur.")
+                elif not cands and not errors:
+                    st.warning("Aucune aide trouvée. Essayez d'autres mots-clés.")
+
+        sel = st.session_state.fin_results
+        if sel:
+            st.divider()
+            if st.session_state.fin_synthese:
+                st.success(f"💡 {st.session_state.fin_synthese}")
+            st.subheader(f"💶 {len(sel)} aide(s) pour votre projet")
+            for item in sel:
+                details = [
+                    item.get("source", ""),
+                    ("Financeur : " + ", ".join(item.get("financeurs", [])[:3])) if item.get("financeurs") else "",
+                    item.get("nature", ""),
+                    f"Taux : {item['taux']}" if item.get("taux") else "",
+                    f"Territoire : {item['territoire']}" if item.get("territoire") else "",
+                    f"⏰ Date limite : {item['date_limite']}" if item.get("date_limite") else
+                    (item.get("recurrence") or ""),
+                ]
+                show_item(item, "Financements", details)
+                if item.get("candidater") and item.get("candidater") != item.get("url"):
+                    st.caption(f"↳ [Candidater / en savoir plus chez le financeur]({item['candidater']})")
+            st.caption("Sources : Aides-territoires (Licence Ouverte 2.0) et Mission Transition Écologique, "
+                       f"consultées le {datetime.now().strftime('%d/%m/%Y')}. Vérifiez toujours les "
+                       "conditions et dates auprès du financeur.")
             st.button("✅ Continuer vers la synthèse →", type="primary", on_click=next_phase)
         else:
             st.button("Passer cette étape →", on_click=next_phase)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# PHASE 10 — SYNTHÈSE & EXPORT
+# PHASE 11 — SYNTHÈSE & EXPORT
 # ════════════════════════════════════════════════════════════════════════════════
-elif st.session_state.phase == 10:
-    phase_header("11", "Synthèse & Export",
+elif st.session_state.phase == 11:
+    phase_header("12", "Synthèse & Export",
                  "Votre problème, et tout ce qui existe déjà pour vous aider à le traiter.")
 
     if require_problem():
         retenus = list(st.session_state.retenus.values())
         if not retenus:
-            st.warning("Vous n'avez retenu aucune ressource. Revenez aux phases 8 à 10 et cochez "
+            st.warning("Vous n'avez retenu aucune ressource. Revenez aux phases 8 à 11 et cochez "
                        "« Retenir » sur celles qui vous intéressent.")
         else:
             groupes: dict[str, list] = {}
@@ -2297,7 +2409,8 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
                                           f"— {k.get('echeance', '')}", style="List Bullet")
                 for titre_s, synth in [("Communs & ressources (wiki FabMob)", st.session_state.wiki_synthese),
                                        ("Solutions France Mobilités", st.session_state.fm_synthese),
-                                       ("Données ouvertes", st.session_state.data_synthese)]:
+                                       ("Données ouvertes", st.session_state.data_synthese),
+                                       ("Financements", st.session_state.fin_synthese)]:
                     if synth:
                         doc.add_heading(titre_s, level=2)
                         doc.add_paragraph(synth)
@@ -2340,7 +2453,7 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
 # Balise canonical vers France Mobilités sur les pages qui affichent leurs solutions
 _fm_shown = (
     (st.session_state.phase == 8 and st.session_state.fm_results)
-    or (st.session_state.phase == 10
+    or (st.session_state.phase == 11
         and any(r.get("origine") == "France Mobilités" for r in st.session_state.retenus.values()))
 )
 set_canonical(sources.FM_SOLUTIONS_PAGE if _fm_shown else None)

@@ -449,3 +449,185 @@ def opendata_candidates(queries: list[str], keywords: list[str]) -> tuple[list[d
     except Exception as e:  # noqa: BLE001
         errors.append(f"INSEE Melodi : {e}")
     return out, errors
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# FINANCEMENTS : AIDES-TERRITOIRES + MISSION TRANSITION ÉCOLOGIQUE
+# ════════════════════════════════════════════════════════════════════════════════
+AT_API = "https://aides-territoires.beta.gouv.fr/api/"
+AT_BASE = "https://aides-territoires.beta.gouv.fr"
+MTE_API = "https://mission-transition-ecologique.beta.gouv.fr/api/programs"
+MTE_BASE = "https://mission-transition-ecologique.beta.gouv.fr"
+
+# Type de porteur de projet → identifiant Aides-territoires
+AT_AUDIENCES = {
+    "Tous types de porteurs": None,
+    "Commune": "commune",
+    "Intercommunalité / Pays": "epci",
+    "Département": "department",
+    "Région": "region",
+    "Établissement public / services de l'État": "public-org",
+    "Entreprise": "private-sector",
+    "Association": "association",
+}
+
+
+def aides_territoires_key() -> str:
+    try:
+        return st.secrets.get("AIDES_TERRITOIRES_API_KEY", "")
+    except Exception:
+        return ""
+
+
+@st.cache_data(ttl=23 * 3600, show_spinner=False)
+def _at_token(api_key: str) -> str:
+    """Échange la clé API (permanente) contre un jeton valable 24 h."""
+    r = requests.post(AT_API + "connexion/", headers={"X-AUTH-TOKEN": api_key,
+                                                      "Content-Type": "application/json"},
+                      data="{}", timeout=30)
+    r.raise_for_status()
+    tok = r.json().get("token")
+    if not tok:
+        raise RuntimeError("clé API refusée par Aides-territoires")
+    return tok
+
+
+def _at_get(path: str, params: dict) -> dict:
+    tok = _at_token(aides_territoires_key())
+    return _get_json(AT_API + path, params, {"Authorization": f"Bearer {tok}",
+                                             "Accept": "application/json"}, timeout=60, tries=2)
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def at_find_perimeter(query: str) -> dict | None:
+    """« Seine-et-Marne » ou « 77 » → {"id": 71053, "name": ..., "scale": ...}."""
+    query = (query or "").strip()
+    if not query or not aides_territoires_key():
+        return None
+    if re.fullmatch(r"\d[\dAB]|\d{3}", query.upper()):   # numéro de département : 77, 2A, 974
+        return {"code": query.upper(), "name": f"Département {query.upper()}", "scale": "Département"}
+    d = _at_get("perimeters/", {"q": query, "itemsPerPage": 20})
+    res = d.get("results", []) if isinstance(d, dict) else d
+    prefer = ["Département", "Région", "Intercommunalité", "Commune"]
+    res = sorted(res, key=lambda x: (norm(x.get("name", "")) != norm(query),   # nom exact d'abord
+                                     not norm(x.get("name", "")).startswith(norm(query).rstrip()),
+                                     prefer.index(x["scale"]) if x.get("scale") in prefer else 9))
+    if not res:
+        return None
+    x = res[0]
+    return {"id": str(x.get("id", "")).split("-")[0], "name": x.get("name"), "scale": x.get("scale")}
+
+
+def _at_record(a: dict) -> dict:
+    financeurs = [f.get("name", "") for f in a.get("financers_full") or [] if isinstance(f, dict)]
+    lo, hi = a.get("subvention_rate_lower_bound"), a.get("subvention_rate_upper_bound")
+    taux = f"{lo}–{hi} %" if lo and hi else (f"jusqu'à {hi} %" if hi else (f"{lo} %" if lo else ""))
+    desc = strip_html(a.get("description") or "")
+    return {
+        "id": "at_" + str(a.get("id")),
+        "source": "Aides-territoires",
+        "titre": a.get("name", ""),
+        "financeurs": financeurs,
+        "nature": ", ".join(a.get("aid_types") or []),
+        "territoire": a.get("perimeter") or "",
+        "publics": a.get("targeted_audiences") or [],
+        "date_limite": (a.get("submission_deadline") or "")[:10],
+        "recurrence": a.get("recurrence") or "",
+        "appel_a_projets": bool(a.get("is_call_for_project")),
+        "taux": taux,
+        "description": desc[:500],
+        "url": AT_BASE + (a.get("url") or ""),
+        "candidater": a.get("application_url") or a.get("origin_url") or "",
+        "_idx": _idx(titre=(a.get("name", ""), 3.0), description=(desc, 1.0),
+                     categories=(" ; ".join(a.get("categories") or []), 1.5)),
+    }
+
+
+def aides_territoires_search(keywords: list[str], audience: str | None = None,
+                             perimeter: dict | None = None, per_kw: int = 30) -> list[dict]:
+    """Aides ouvertes correspondant aux mots-clés (une requête par mot-clé, en parallèle)."""
+    kws = split_keywords(keywords)
+    # Mots-clés précis d'abord : les expressions de 2 mots, puis les mots seuls
+    kws = sorted(kws, key=lambda k: -len(k.split()))[:8]
+
+    def one(kw):
+        params = {"keyword": kw, "itemsPerPage": per_kw}
+        if audience:
+            params["organization_type_slugs[]"] = audience
+        if perimeter and perimeter.get("code"):
+            params["perimeter_codes[]"] = perimeter["code"]
+        elif perimeter and perimeter.get("id"):
+            params["perimeter_id"] = perimeter["id"]
+        try:
+            return _at_get("aids/", params).get("results", [])
+        except RuntimeError:
+            return []
+
+    _at_token(aides_territoires_key())  # erreur explicite si la clé est refusée
+    seen, out = set(), []
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for results in ex.map(one, kws):
+            for a in results:
+                if a.get("id") in seen or a.get("is_live") is False:
+                    continue
+                seen.add(a.get("id"))
+                out.append(_at_record(a))
+    return out
+
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def mte_index() -> list[dict]:
+    """Aides aux entreprises recensées par Mission Transition Écologique (≈ 200 dispositifs)."""
+    from datetime import date
+    today = date.today()
+    records = []
+    for p in _get_json(MTE_API, timeout=60):
+        fin = p.get("fin de validité") or ""
+        try:
+            j, m, a = (int(x) for x in fin.split("/"))
+            if date(a, m, j) < today:
+                continue
+        except ValueError:
+            pass
+        desc = strip_html(" ".join(str(p.get(k) or "") for k in ("description", "description longue")))
+        titre = p.get("titre", "")
+        records.append({
+            "id": "mte_" + str(p.get("id")),
+            "source": "Mission Transition Écologique",
+            "titre": titre,
+            "financeurs": [p.get("opérateur de contact")] if p.get("opérateur de contact") else [],
+            "nature": p.get("nature de l'aide") or "",
+            "territoire": "",
+            "publics": ["Entreprise"],
+            "date_limite": "" if fin.endswith("2050") else fin,
+            "recurrence": "",
+            "appel_a_projets": False,
+            "taux": "",
+            "description": ((p.get("promesse") or "") + " — " + desc)[:500],
+            "url": f"{MTE_BASE}/aides-entreprise/{p.get('id')}",
+            "candidater": p.get("url") or "",
+            "_idx": _idx(titre=(titre, 3.0), promesse=(p.get("promesse") or "", 2.0),
+                         description=(desc, 1.0),
+                         objectifs=(" ".join(str(o) for o in p.get("objectifs") or []), 1.0)),
+        })
+    return records
+
+
+def funding_candidates(keywords: list[str], audience: str | None, perimeter: dict | None,
+                       include_mte: bool) -> tuple[list[dict], list[str]]:
+    """Candidats Aides-territoires + Mission Transition Écologique. Renvoie aussi les erreurs."""
+    errors, out = [], []
+    if aides_territoires_key():
+        try:
+            out += preselect(aides_territoires_search(keywords, audience, perimeter),
+                             keywords, 30, min_score=0.5)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"Aides-territoires : {e}")
+    else:
+        errors.append("Aides-territoires : clé API absente (AIDES_TERRITOIRES_API_KEY dans les secrets)")
+    if include_mte:
+        try:
+            out += preselect(mte_index(), keywords, 15)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"Mission Transition Écologique : {e}")
+    return out, errors
