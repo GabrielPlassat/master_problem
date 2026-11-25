@@ -31,6 +31,12 @@ Dans les phases 8 à 12, l'outil extrait des mots-clés du problème (modifiable
 fiches correspondantes dans chaque source, puis Claude choisit les plus pertinentes et explique
 comment s'en servir. Cochez **Retenir** pour les garder dans la fiche finale.
 
+**Contribuer à son tour** : aux phases Bibliographie, Communs, Solutions et Données ouvertes, un encadré
+« À votre tour » rappelle que ces ressources existent parce que d'autres les ont documentées et ouvertes,
+et invite à faire de même pour son projet (publication sur HAL ou Zenodo, fiche sur le wiki de la
+Fabrique des Mobilités, référencement France Mobilités, données sur data.gouv.fr), avec la licence
+ouverte adaptée. Les engagements cochés apparaissent dans la synthèse, la feuille de route et la fiche Word.
+
 **Conseil** : des mots simples séparés par des virgules (*covoiturage, rural, autopartage*) donnent
 les meilleurs résultats. Une expression longue est découpée automatiquement en mots.
 
