@@ -631,3 +631,186 @@ def funding_candidates(keywords: list[str], audience: str | None, perimeter: dic
         except Exception as e:  # noqa: BLE001
             errors.append(f"Mission Transition Écologique : {e}")
     return out, errors
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# BIBLIOGRAPHIE SCIENTIFIQUE : HAL, OPENALEX, LIBRAIRIE ADEME
+# ════════════════════════════════════════════════════════════════════════════════
+HAL_API = "https://api.archives-ouvertes.fr/search/"
+OPENALEX_API = "https://api.openalex.org/works"
+ADEME_LIB = "https://librairie.ademe.fr/recherche"
+
+# Structures publiques mises en avant quand elles apparaissent dans HAL
+PUBLIC_BODIES = ["CEREMA", "ADEME", "CNRS", "IFSTTAR", "UNIV-EIFFEL", "INRAE", "IRD", "INRIA",
+                 "CIRAD", "BRGM", "IGN", "INED", "INSERM", "CEA", "IFPEN", "SANTE-PUBLIQUE-FRANCE"]
+HAL_TYPES = {"ART": "Article", "COMM": "Communication", "OUV": "Ouvrage", "COUV": "Chapitre",
+             "THESE": "Thèse", "REPORT": "Rapport", "HDR": "HDR", "MEM": "Mémoire",
+             "UNDEFINED": "Prépublication", "OTHER": "Autre", "POSTER": "Poster"}
+
+
+HAL_PUBLIC_FQ = ("collCode_s:(CEREMA OR UNIV-EIFFEL OR IFSTTAR) OR "
+                 "structAcronym_s:(ADEME OR CEREMA OR IFSTTAR)")
+
+
+def hal_search(queries: list[str], rows: int = 15, extra_fq: str | None = None) -> list[dict]:
+    """Archives ouvertes HAL : CNRS, Cerema, ADEME, universités, organismes de recherche publics."""
+    fl = ("docid,title_s,authFullName_s,producedDateY_i,docType_s,uri_s,abstract_s,"
+          "structAcronym_s,collCode_s,journalTitle_s,doiId_s")
+
+    def one(q):
+        try:
+            fq = ["docType_s:(ART OR COMM OR OUV OR COUV OR THESE OR REPORT OR UNDEFINED OR HDR)"]
+            if extra_fq:
+                fq.append(extra_fq)
+            d = _get_json(HAL_API, {"q": q, "rows": rows, "wt": "json", "fl": fl, "fq": fq},
+                          timeout=30, tries=2)
+            return d.get("response", {}).get("docs", [])
+        except RuntimeError:
+            return []
+
+    seen, out = set(), []
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for docs in ex.map(one, queries[:6]):
+            for x in docs:
+                if x.get("docid") in seen:
+                    continue
+                seen.add(x.get("docid"))
+                tags = set(x.get("structAcronym_s") or []) | set(x.get("collCode_s") or [])
+                structures = [s for s in PUBLIC_BODIES if s in tags]
+                titre = (x.get("title_s") or [""])[0]
+                resume = strip_html((x.get("abstract_s") or [""])[0])
+                auteurs = x.get("authFullName_s") or []
+                out.append({
+                    "id": "hal_" + str(x.get("docid")),
+                    "source": "HAL",
+                    "titre": titre,
+                    "auteurs": ", ".join(auteurs[:3]) + (" et al." if len(auteurs) > 3 else ""),
+                    "annee": x.get("producedDateY_i") or "",
+                    "type": HAL_TYPES.get(x.get("docType_s"), x.get("docType_s") or ""),
+                    "revue": x.get("journalTitle_s") or "",
+                    "structures": structures,
+                    "resume": resume[:900],
+                    "url": x.get("uri_s") or "",
+                    "_idx": _idx(titre=(titre, 3.0), resume=(resume, 1.0)),
+                })
+    return out
+
+
+def _openalex_abstract(inv: dict | None) -> str:
+    if not inv:
+        return ""
+    pos = [(i, w) for w, idxs in inv.items() for i in idxs]
+    return " ".join(w for _, w in sorted(pos))
+
+
+def openalex_search(queries: list[str], per_query: int = 10) -> list[dict]:
+    """Littérature scientifique internationale (OpenAlex, base ouverte et gratuite)."""
+    def one(q):
+        try:
+            d = _get_json(OPENALEX_API, {
+                "search": q, "per-page": per_query,
+                "filter": "type:article|review|book-chapter|report|preprint",
+                "select": "id,title,publication_year,authorships,abstract_inverted_index,doi,"
+                          "cited_by_count,primary_location,open_access,type",
+            }, timeout=30, tries=2)
+            return d.get("results", [])
+        except RuntimeError:
+            return []
+
+    seen, out = set(), []
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for works in ex.map(one, queries[:5]):
+            for w in works:
+                if w.get("id") in seen or not w.get("title"):
+                    continue
+                seen.add(w.get("id"))
+                auteurs = [a.get("author", {}).get("display_name", "") for a in w.get("authorships") or []]
+                insts = {i.get("display_name", "") for a in w.get("authorships") or []
+                         for i in a.get("institutions") or []}
+                resume = _openalex_abstract(w.get("abstract_inverted_index"))
+                src = ((w.get("primary_location") or {}).get("source") or {}).get("display_name") or ""
+                url = (w.get("open_access") or {}).get("oa_url") or w.get("doi") or w.get("id")
+                out.append({
+                    "id": "oa_" + w["id"].rsplit("/", 1)[-1],
+                    "source": "OpenAlex",
+                    "titre": w["title"],
+                    "auteurs": ", ".join(auteurs[:3]) + (" et al." if len(auteurs) > 3 else ""),
+                    "annee": w.get("publication_year") or "",
+                    "type": w.get("type") or "",
+                    "revue": src,
+                    "structures": sorted(i for i in insts if any(
+                        k in i.upper() for k in ("CNRS", "CEREMA", "ADEME", "GUSTAVE EIFFEL", "INRAE")))[:3],
+                    "citations": w.get("cited_by_count") or 0,
+                    "resume": resume[:900],
+                    "url": url,
+                    "_idx": _idx(titre=(w["title"], 3.0), resume=(resume, 1.0)),
+                })
+    return out
+
+
+def ademe_library_search(queries: list[str], per_query: int = 8) -> list[dict]:
+    """Études, guides et rapports de la librairie ADEME (page de résultats du site)."""
+    art_re = re.compile(r'<article class="product-miniature.*?</article>', re.S)
+
+    def one(q):
+        try:
+            r = requests.get(ADEME_LIB, params={"controller": "search", "s": q}, timeout=30)
+            r.raise_for_status()
+            return r.text
+        except Exception:  # noqa: BLE001
+            return ""
+
+    seen, out = set(), []
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        for page in ex.map(one, queries[:4]):
+            for art in art_re.findall(page)[:per_query]:
+                m = re.search(r'<h3 class="fr-card__title">\s*<a href="([^"]+)">(.*?)</a>', art, re.S)
+                if not m:
+                    continue
+                url = html.unescape(m.group(1)).split("#")[0]
+                if url in seen:
+                    continue
+                seen.add(url)
+                titre = strip_html(m.group(2))
+                tags = [strip_html(t) for t in re.findall(r'<p class="fr-tag">(.*?)</p>', art, re.S)]
+                details = [strip_html(t) for t in re.findall(r'<p class="fr-card__detail[^"]*">(.*?)</p>', art, re.S)]
+                out.append({
+                    "id": "ademe_" + str(abs(hash(url)) % 10**9),
+                    "source": "Librairie ADEME",
+                    "titre": titre,
+                    "auteurs": "ADEME",
+                    "annee": "",
+                    "type": next((d for d in details if d and "Format" not in d), "Publication"),
+                    "revue": "",
+                    "structures": ["ADEME"],
+                    "resume": " ; ".join(tags),
+                    "url": url,
+                    "_idx": _idx(titre=(titre, 3.0), themes=(" ".join(tags), 1.0)),
+                })
+    return out
+
+
+def biblio_candidates(queries_fr: list[str], queries_en: list[str],
+                      keywords: list[str]) -> tuple[list[dict], list[str]]:
+    """Publications candidates des trois sources, présélectionnées par mots-clés."""
+    errors, out = [], []
+    jobs = {
+        "HAL": lambda: preselect(hal_search(queries_fr), keywords + queries_fr, 20, min_score=0.5),
+        "HAL (Cerema, ADEME, Univ. Gustave Eiffel)": lambda: preselect(
+            hal_search(queries_fr, rows=8, extra_fq=HAL_PUBLIC_FQ), keywords + queries_fr, 10, min_score=0.5),
+        "OpenAlex": lambda: preselect(openalex_search(queries_en), queries_en + keywords, 15, min_score=0.5),
+        "Librairie ADEME": lambda: preselect(ademe_library_search(queries_fr), keywords + queries_fr, 10,
+                                             min_score=0.5),
+    }
+    seen = set()
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {name: ex.submit(fn) for name, fn in jobs.items()}
+        for name, fut in futures.items():
+            try:
+                for r in fut.result():
+                    if r["id"] not in seen:
+                        seen.add(r["id"])
+                        out.append(r)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{name} : {e}")
+    return out, errors
