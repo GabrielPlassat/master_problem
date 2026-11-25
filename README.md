@@ -22,7 +22,7 @@ repartir de zéro.
 | 10 | Solutions & Acteurs | Solutions recensées par [France Mobilités](https://www.francemobilites.fr/solutions) et leurs porteurs |
 | 11 | Données Ouvertes | Jeux de données et API de [data.gouv.fr](https://www.data.gouv.fr), catalogue [Melodi de l'INSEE](https://catalogue-donnees.insee.fr) |
 | 12 | Financements | Aides publiques ouvertes : [Aides-territoires](https://aides-territoires.beta.gouv.fr) (≈ 3 000 aides) et [Mission Transition Écologique](https://mission-transition-ecologique.beta.gouv.fr) (aides aux entreprises), filtrées par type de porteur et territoire |
-| 13 | Synthèse & Export | Ressources retenues, feuille de route, fiche Word |
+| 13 | Synthèse & Export | Le parcours réalisé (du problème exprimé aux financements), les ressources retenues, une feuille de route avec liens vers chaque ressource, et une fiche Word avec liens cliquables |
 
 Chaque phase comporte un encadré **« ℹ️ À propos de cette étape »** : description, objectifs,
 outils et ressources utilisés.
