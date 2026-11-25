@@ -6,7 +6,7 @@ repartir de zéro.
 
 ---
 
-## 📐 Les 11 phases
+## 📐 Les 12 phases
 
 | Phase | Nom | Ce qu'elle fait |
 |-------|-----|-----------------|
@@ -20,9 +20,10 @@ repartir de zéro.
 | 8 | Communs & Ressources | Communs, projets, acteurs et connaissances du [wiki de la Fabrique des Mobilités](https://wiki.lafabriquedesmobilites.fr) |
 | 9 | Solutions & Acteurs | Solutions recensées par [France Mobilités](https://www.francemobilites.fr/solutions) et leurs porteurs |
 | 10 | Données Ouvertes | Jeux de données et API de [data.gouv.fr](https://www.data.gouv.fr), catalogue [Melodi de l'INSEE](https://catalogue-donnees.insee.fr) |
-| 11 | Synthèse & Export | Ressources retenues, feuille de route, fiche Word |
+| 11 | Financements | Aides publiques ouvertes : [Aides-territoires](https://aides-territoires.beta.gouv.fr) (≈ 3 000 aides) et [Mission Transition Écologique](https://mission-transition-ecologique.beta.gouv.fr) (aides aux entreprises), filtrées par type de porteur et territoire |
+| 12 | Synthèse & Export | Ressources retenues, feuille de route, fiche Word |
 
-Dans les phases 8 à 10, l'outil extrait des mots-clés du problème (modifiables), présélectionne les
+Dans les phases 8 à 11, l'outil extrait des mots-clés du problème (modifiables), présélectionne les
 fiches correspondantes dans chaque source, puis Claude choisit les plus pertinentes et explique
 comment s'en servir. Cochez **Retenir** pour les garder dans la fiche finale.
 
@@ -56,6 +57,13 @@ de communs, solutions, acteurs et données ouvertes, sans passer par les phases 
    ```
 3. Cliquez sur **Deploy**.
 
+Pour la phase Financements, ajoutez aussi votre clé Aides-territoires (gratuite : créez un compte
+sur aides-territoires.beta.gouv.fr, puis « Mes paramètres → Ma clé API ») :
+```toml
+AIDES_TERRITOIRES_API_KEY = "votre-clé"
+```
+Sans cette clé, seules les aides Mission Transition Écologique sont cherchées.
+
 Option : le wiki de la Fabrique des Mobilités n'accepte que les robots autorisés. L'outil utilise
 par défaut le nom autorisé `XD-Chatbot`. S'il change, ajoutez dans les secrets :
 ```toml
@@ -67,7 +75,7 @@ WIKI_USER_AGENT = "nouveau-nom"
 | Fichier | Rôle |
 |---------|------|
 | `app.py` | L'application (toutes les phases) |
-| `sources.py` | La connexion au wiki, à France Mobilités, à data.gouv.fr et à l'INSEE |
+| `sources.py` | La connexion au wiki, à France Mobilités, à data.gouv.fr, à l'INSEE, à Aides-territoires et à Mission Transition Écologique |
 | `requirements.txt` | Les bibliothèques Python nécessaires |
 
 ## ⚠️ Limites à connaître
@@ -80,6 +88,11 @@ WIKI_USER_AGENT = "nouveau-nom"
   `<link rel="canonical">`, l'URL de la page d'origine sur francemobilites.fr. L'outil ajoute cette
   balise (vers https://www.francemobilites.fr/solutions) sur les pages qui affichent leurs
   solutions, et chaque solution renvoie vers sa fiche d'origine.
+- **Aides-territoires** : les données sont sous Licence Ouverte 2.0 ; l'outil cite la source et la date
+  de consultation. Les aides visent surtout les collectivités. Vérifiez toujours les conditions et dates
+  auprès du financeur.
+- **Mission Transition Écologique** : l'outil lit la liste des aides affichée sur le site, qui n'est pas
+  une API officielle documentée et peut changer.
 - Les pages « Connaissance » du wiki sont repérées par leur type de page (elles sont rangées dans la
   catégorie « Référentiel »).
 
