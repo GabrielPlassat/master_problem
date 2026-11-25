@@ -134,7 +134,8 @@ DEFAULTS = {
     "fin_synthese": "",
     "fin_porteur": "Tous types de porteurs",
     "fin_territoire": "",
-    "retenus": {},              # {id: fiche} — ressources retenues par l'expert
+    "retenus": {},
+    "contributions": {},        # ce que l'expert s'engage à documenter / ouvrir à son tour              # {id: fiche} — ressources retenues par l'expert
     "feuille_route": {},        # synthèse finale générée en phase 11
     "_synth_data": None,
     "_sel_sig": None,
@@ -878,6 +879,96 @@ def show_source_error(name: str, err: Exception):
     st.error(f"⚠️ {name} est momentanément inaccessible. Réessayez plus tard.\n\n`{err}`")
 
 
+# ─── CONTRIBUER À SON TOUR : DOCUMENTER ET OUVRIR SES RESSOURCES ───────────────
+CONTRIB = {
+    "biblio": {
+        "titre": "📤 À votre tour : publiez vos travaux en accès ouvert",
+        "constat": "Les publications que vous venez de consulter sont accessibles parce que des chercheurs, "
+                   "le Cerema, l'ADEME ou des universités les ont déposées en accès ouvert. Votre projet "
+                   "va produire des connaissances (études, évaluations, retours d'expérience) : en les "
+                   "publiant à votre tour, vous enrichissez la base sur laquelle le prochain s'appuiera.",
+        "actions": [
+            "Déposez vos articles, rapports et communications sur [HAL](https://hal.science) "
+            "([guide de dépôt](https://doc.hal.science)), l'archive ouverte de la recherche française",
+            "Hors du monde académique, déposez rapports, jeux de données et code sur "
+            "[Zenodo](https://zenodo.org) : chaque dépôt reçoit un identifiant pérenne (DOI)",
+            "Prévoyez dès le départ un livrable « retour d'expérience » publiable, y compris en cas d'échec",
+        ],
+        "licence": "Licence conseillée : **CC BY 4.0** pour les textes (réutilisation libre avec citation de "
+                   "l'auteur).",
+        "engagement": "Je publierai les connaissances produites par le projet en accès ouvert",
+    },
+    "wiki": {
+        "titre": "📤 À votre tour : documentez votre projet et vos communs sur le wiki",
+        "constat": "Ces communs, projets et connaissances existent parce que d'autres ont pris le temps de "
+                   "les documenter et de les partager. Votre projet produira lui aussi des ressources "
+                   "réutilisables (méthodes, outils, données, retours d'expérience) : documentées sur le "
+                   "wiki, elles deviennent des communs que d'autres territoires pourront reprendre.",
+        "actions": [
+            "Créez la fiche de votre projet : [formulaire Projet](https://wiki.lafabriquedesmobilites.fr/wiki/Formulaire:Projet)",
+            "Documentez chaque ressource réutilisable comme un commun : "
+            "[formulaire Commun](https://wiki.lafabriquedesmobilites.fr/wiki/Formulaire:Commun)",
+            "Partagez ce que vous avez appris : "
+            "[formulaire Connaissance](https://wiki.lafabriquedesmobilites.fr/wiki/Formulaire:Connaissance) — "
+            "et présentez votre structure : [formulaire Acteur](https://wiki.lafabriquedesmobilites.fr/wiki/Formulaire:Acteur)",
+            "Commencez par le guide [Contribuer au wiki](https://wiki.lafabriquedesmobilites.fr/wiki/Contribuer)",
+        ],
+        "licence": "Licences conseillées : **CC BY-SA 4.0** pour les documents et méthodes, une licence libre "
+                   "(EUPL, MIT, GPL…) pour les logiciels, **CERN OHL** pour le matériel.",
+        "engagement": "Je documenterai mon projet et ses ressources réutilisables sur le wiki",
+    },
+    "fm": {
+        "titre": "📤 À votre tour : référencez votre solution sur France Mobilités",
+        "constat": "Ces solutions sont visibles parce que leurs porteurs les ont référencées, avec leurs "
+                   "résultats et leurs contacts. Une fois votre projet lancé, le référencer permet à "
+                   "d'autres collectivités de le découvrir, de le reproduire et de vous contacter.",
+        "actions": [
+            "Référencez votre projet ou votre solution via la "
+            "[campagne de référencement de France Mobilités](https://www.francemobilites.fr/referencement)",
+            "Décrivez honnêtement les conditions de réussite, les coûts et les limites : c'est ce qui rend "
+            "une fiche utile aux autres",
+            "Mettez la fiche à jour quand le projet évolue (beaucoup de fiches ne sont plus actualisées)",
+        ],
+        "licence": "Pensez à indiquer sous quelle licence vos outils et documents sont réutilisables.",
+        "engagement": "Je référencerai ma solution sur France Mobilités",
+    },
+    "data": {
+        "titre": "📤 À votre tour : ouvrez les données de votre projet",
+        "constat": "Ces jeux de données existent parce que des collectivités, des opérateurs et l'État ont "
+                   "choisi de les ouvrir. Votre projet va collecter des données (comptages, enquêtes, "
+                   "mesures de vos indicateurs) : ouvertes, elles permettront à d'autres de comparer, "
+                   "d'évaluer et de reproduire votre démarche.",
+        "actions": [
+            "Publiez vos données sur [data.gouv.fr](https://www.data.gouv.fr) "
+            "([guide des producteurs](https://www.data.gouv.fr/pages/onboarding/producteurs))",
+            "Utilisez un schéma de données existant quand il y en a un "
+            "([schema.data.gouv.fr](https://schema.data.gouv.fr)) : vos données seront comparables aux autres",
+            "Prévoyez l'ouverture dès la conception de la collecte (anonymisation, format, fréquence)",
+        ],
+        "licence": "Licences conseillées : **Licence Ouverte 2.0** (Etalab) ou **ODbL** "
+                   "([licences de référence](https://www.data.gouv.fr/pages/legal/licences)).",
+        "engagement": "J'ouvrirai les données produites par le projet",
+    },
+}
+
+
+def contribute_box(kind: str):
+    """Encadré « À votre tour » : relier ce que d'autres ont ouvert à ce que l'expert peut ouvrir."""
+    c = CONTRIB[kind]
+    contrib = st.session_state.contributions.setdefault(kind, {"engage": False, "note": ""})
+    with st.container(border=True):
+        st.markdown(f"#### {c['titre']}")
+        st.markdown(c["constat"])
+        st.markdown("\n".join(f"- {a}" for a in c["actions"]))
+        st.caption(c["licence"])
+        contrib["engage"] = st.checkbox(c["engagement"], value=contrib.get("engage", False),
+                                        key=f"contrib_{kind}")
+        if contrib["engage"]:
+            contrib["note"] = st.text_input(
+                "Quoi précisément ? (facultatif)", value=contrib.get("note", ""), key=f"contrib_note_{kind}",
+                placeholder="Ex : la méthode de balisage, les comptages piétons, le rapport d'évaluation…")
+
+
 # ─── SYNTHÈSE FINALE : PARCOURS ET LIENS ────────────────────────────────────────
 def retenus_index() -> dict[str, dict]:
     """Ressources retenues, numérotées s1, s2… (identifiants donnés à Claude)."""
@@ -900,6 +991,21 @@ def cite_retenus(txt: str, idx: dict[str, dict]) -> str:
     """[s2] dans un texte → lien Markdown vers la ressource."""
     return re.sub(r"\[(s\d+)\]", lambda m: f"({link_md(idx[m.group(1)])})" if m.group(1) in idx else "",
                   txt or "")
+
+
+def contributions_list() -> list[dict]:
+    """Engagements « à votre tour » cochés par l'expert, avec où contribuer."""
+    ou = {"biblio": "HAL (hal.science) ou Zenodo, sous CC BY 4.0",
+          "wiki": "wiki de la Fabrique des Mobilités (formulaires Projet, Commun, Connaissance)",
+          "fm": "campagne de référencement de France Mobilités (francemobilites.fr/referencement)",
+          "data": "data.gouv.fr, sous Licence Ouverte 2.0 ou ODbL"}
+    out = []
+    for kind in ("biblio", "wiki", "fm", "data"):
+        c = (st.session_state.contributions or {}).get(kind) or {}
+        if c.get("engage"):
+            out.append({"kind": kind, "engagement": CONTRIB[kind]["engagement"],
+                        "note": c.get("note", ""), "ou": ou[kind]})
+    return out
 
 
 def parcours_steps() -> list[dict]:
@@ -962,7 +1068,15 @@ def parcours_steps() -> list[dict]:
             [x for x in ss.retenus.values() if x.get("origine") in ("data.gouv.fr", "INSEE (Melodi)")])
     if ss.fin_results:
         add("12", "Financements", "💶", f"{len(ss.fin_results)} aide(s) identifiée(s).", kept("Financements"))
+    eng = contributions_list()
+    if eng:
+        add("→", "Contribuer à son tour", "🤝",
+            " ; ".join(e["engagement"] + (f" ({e['note']})" if e["note"] else "") for e in eng) + ".")
     return steps
+
+
+def _step_label(stp: dict) -> str:
+    return f"Phase {stp['num']} · {stp['nom']}" if stp["num"][:1].isdigit() else f"Et ensuite · {stp['nom']}"
 
 
 def render_parcours(steps: list[dict]):
@@ -977,7 +1091,7 @@ def render_parcours(steps: list[dict]):
 <div class="pc-step">
   <div class="pc-dot">{stp['icone']}</div>
   <div class="pc-body">
-    <div class="pc-title">Phase {html.escape(stp['num'])} · {html.escape(stp['nom'])}</div>
+    <div class="pc-title">{html.escape(_step_label(stp))}</div>
     <div class="pc-text">{html.escape(stp['texte'])}</div>
     {f'<ul class="pc-links">{liens}</ul>' if liens else ''}
   </div>
@@ -2476,8 +2590,10 @@ Dans "references", liste 8 à 15 publications réellement utiles, de la plus à 
                     ])
             st.caption("Synthèse rédigée par Claude à partir des titres et résumés : vérifiez les "
                        "publications originales avant de les citer.")
+            contribute_box("biblio")
             st.button("✅ Continuer vers les communs →", type="primary", on_click=next_phase)
         else:
+            contribute_box("biblio")
             st.button("Passer cette étape →", on_click=next_phase)
 
 
@@ -2543,9 +2659,11 @@ elif st.session_state.phase == 8:
                             item.get("description", "")[:160],
                             ("Thèmes : " + ", ".join(item.get("themes", [])[:3])) if item.get("themes") else "",
                         ])
-            st.caption("Cochez « Retenir » pour ajouter une ressource à votre fiche finale (phase 11).")
+            st.caption("Cochez « Retenir » pour ajouter une ressource à votre fiche finale (phase 13).")
+            contribute_box("wiki")
             st.button("✅ Continuer vers les solutions France Mobilités →", type="primary", on_click=next_phase)
         else:
+            contribute_box("wiki")
             st.button("Passer cette étape →", on_click=next_phase)
 
 
@@ -2615,8 +2733,10 @@ elif st.session_state.phase == 9:
                 for nom, a in acteurs.items():
                     lien = f"[{nom}]({a['url']})" if a["url"] else nom
                     st.markdown(f"- **{lien}** — {', '.join(a['solutions'])}")
+            contribute_box("fm")
             st.button("✅ Continuer vers les données ouvertes →", type="primary", on_click=next_phase)
         else:
+            contribute_box("fm")
             st.button("Passer cette étape →", on_click=next_phase)
 
 
@@ -2678,8 +2798,10 @@ elif st.session_state.phase == 10:
                     f"Mise à jour : {item.get('maj', '')}" if item.get("maj") else "",
                     f"Formats : {item['formats']}" if item.get("formats") else "",
                 ])
+            contribute_box("data")
             st.button("✅ Continuer vers les financements →", type="primary", on_click=next_phase)
         else:
+            contribute_box("data")
             st.button("Passer cette étape →", on_click=next_phase)
 
 
@@ -2806,6 +2928,16 @@ elif st.session_state.phase == 12:
             render_parcours(steps)
             st.divider()
 
+        engagements = contributions_list()
+        if engagements:
+            st.subheader("🤝 Ce que vous ouvrirez à votre tour")
+            st.caption("Vos engagements à documenter et ouvrir les ressources de votre projet, sous licence "
+                       "ouverte, comme d'autres l'ont fait pour les ressources que vous avez utilisées.")
+            for e in engagements:
+                st.markdown(f"- **{e['engagement']}**" + (f" — {e['note']}" if e["note"] else "")
+                            + f"  \n  ↳ {e['ou']}")
+            st.divider()
+
         retenus = list(st.session_state.retenus.values())
         idx = retenus_index()
         if not retenus:
@@ -2832,7 +2964,12 @@ elif st.session_state.phase == 12:
 Ressources existantes retenues par l'expert, chacune avec son identifiant :
 {listing}
 
+Engagements de l'expert pour ouvrir à son tour les ressources de son projet :
+{chr(10).join("- " + e["engagement"] + (" : " + e["note"] if e["note"] else "") for e in contributions_list()) or "- aucun pour l'instant"}
+
 Propose une feuille de route pour s'appuyer sur ces ressources plutôt que de repartir de zéro.
+Inclus au moins une action pour documenter et ouvrir les ressources produites par le projet (wiki, données
+ouvertes, référencement, publication), sous licence ouverte, en t'appuyant sur ses engagements.
 Désigne TOUJOURS les ressources par leur identifiant (s1, s2…), jamais par leur titre.
 Réponds UNIQUEMENT en JSON valide (aucun markdown) :
 - "message_cle" : 1-2 phrases — ce que l'existant change dans la manière d'aborder le problème
@@ -2877,7 +3014,7 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
                     doc.add_heading("Le parcours réalisé", level=1)
                     for stp in steps_w:
                         p = doc.add_paragraph(style="List Bullet")
-                        p.add_run(f"Phase {stp['num']} · {stp['nom']} : ").bold = True
+                        p.add_run(f"{_step_label(stp)} : ").bold = True
                         p.add_run(stp["texte"])
                         for l in stp["liens"][:5]:
                             if l.get("url"):
@@ -2946,6 +3083,13 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
                         txt = r.get("comment_mobiliser") or r.get("pourquoi") or ""
                         if txt:
                             p.add_run(f" — {txt}")
+                eng_w = contributions_list()
+                if eng_w:
+                    doc.add_heading("Ce que le projet ouvrira à son tour", level=1)
+                    for e in eng_w:
+                        p = doc.add_paragraph(style="List Bullet")
+                        p.add_run(e["engagement"]).bold = True
+                        p.add_run((f" — {e['note']}" if e["note"] else "") + f" ({e['ou']})")
                 fr_ = st.session_state.feuille_route
                 if fr_:
                     doc.add_heading("Feuille de route de mobilisation", level=1)
