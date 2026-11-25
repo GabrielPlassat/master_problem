@@ -6,6 +6,7 @@ Outil Streamlit + Claude API
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
+import html
 import json
 import io
 import re
@@ -875,6 +876,152 @@ def show_item(item: dict, origin: str, details: list[str]):
 
 def show_source_error(name: str, err: Exception):
     st.error(f"⚠️ {name} est momentanément inaccessible. Réessayez plus tard.\n\n`{err}`")
+
+
+# ─── SYNTHÈSE FINALE : PARCOURS ET LIENS ────────────────────────────────────────
+def retenus_index() -> dict[str, dict]:
+    """Ressources retenues, numérotées s1, s2… (identifiants donnés à Claude)."""
+    return {f"s{i}": r for i, r in enumerate(st.session_state.retenus.values(), 1)}
+
+
+def link_md(r: dict) -> str:
+    titre = (r.get("titre") or "").replace("[", "(").replace("]", ")")
+    return f"[{titre}]({r['url']})" if r.get("url") else titre
+
+
+def action_resources(a: dict, idx: dict[str, dict]) -> list[dict]:
+    """Ressources d'une action de la feuille de route (identifiants s1… ou ancien format texte)."""
+    res = a.get("ressources")
+    ids = res if isinstance(res, list) else re.findall(r"s\d+", str(res or ""))
+    return [idx[i] for i in ids if i in idx]
+
+
+def cite_retenus(txt: str, idx: dict[str, dict]) -> str:
+    """[s2] dans un texte → lien Markdown vers la ressource."""
+    return re.sub(r"\[(s\d+)\]", lambda m: f"({link_md(idx[m.group(1)])})" if m.group(1) in idx else "",
+                  txt or "")
+
+
+def parcours_steps() -> list[dict]:
+    """Le chemin parcouru, du problème général exprimé par l'expert aux financements."""
+    ss = st.session_state
+    steps = []
+
+    def add(num, nom, icone, texte, liens=None):
+        if texte and len(texte) > 450:           # textes très longs raccourcis dans la frise
+            texte = texte[:450].rsplit(" ", 1)[0] + "…"
+        if texte:
+            steps.append({"num": num, "nom": nom, "icone": icone, "texte": texte, "liens": liens or []})
+
+    def kept(origine_prefix):
+        return [r for r in ss.retenus.values() if str(r.get("origine", "")).startswith(origine_prefix)]
+
+    if ss.problem_input:
+        add("1", "Problème exprimé", "✍️", f"« {ss.problem_input.strip()} »")
+    if ss.reformulation:
+        cyn = ss.cynefin.get("categorie", "") if isinstance(ss.cynefin, dict) else str(ss.cynefin or "")
+        add("1", "Problème reformulé", "🔄", ss.reformulation + (f" — nature : {cyn}" if cyn else ""))
+    if ss.miroir_lecon:
+        add("2", "Miroir des Impossibles", "🪞", f"Leçon retenue : {ss.miroir_lecon}")
+    if ss.scout_selections or ss.scout_ouvertures:
+        techs = ", ".join(t.get("technologie", "") for t in ss.scout_selections)
+        add("3", "Scout Technologique", "🔭",
+            " ".join(x for x in [f"Technologies retenues : {techs}." if techs else "",
+                                 ss.scout_ouvertures] if x))
+    if ss.selected_sub_problem and ss.selected_sub_problem != ss.hmw:
+        n = len(ss.sub_problems)
+        add("4", "Sous-problème choisi", "🎯",
+            (f"Parmi {n} sous-problèmes candidats : " if n else "") + ss.selected_sub_problem)
+    r, c = ss.resources or {}, ss.constraints or {}
+    if r.get("budget") or r.get("etp") or c.get("objectif_principal"):
+        add("5", "Moyens", "💰",
+            f"{r.get('budget', 0):,.0f} € · {r.get('etp', 0)} ETP · {c.get('duree_mois', '?')} mois"
+            .replace(",", " ")
+            + (f" — objectif : {c['objectif_principal']}" if c.get("objectif_principal") else ""))
+    if ss.coherence_score is not None:
+        add("6", "Test de cohérence", "🔬",
+            f"{ss.coherence_score}/100 — {(ss.coherence_details or {}).get('verdict', '')}")
+    if ss.hmw:
+        add("7", "Problème formulé", "✨", ss.hmw)
+    bs = ss.biblio_synthese or {}
+    if bs:
+        lev = re.sub(r"\[r\d+\]", "", (bs.get("leviers_efficaces") or [""])[0]).strip()
+        add("8", "Bibliographie", "📚",
+            f"{len(ss.biblio_results)} référence(s) retenue(s) par l'analyse."
+            + (f" Levier clé : {lev}" if lev else ""),
+            kept("Bibliographie") or ss.biblio_results[:3])
+    nb_wiki = sum(len(v) for v in (ss.wiki_results or {}).values())
+    if nb_wiki:
+        add("9", "Communs & ressources", "🧩", f"{nb_wiki} fiche(s) du wiki de la Fabrique des Mobilités.",
+            kept("Wiki FabMob"))
+    if ss.fm_results:
+        add("10", "Solutions & acteurs", "🛠️", f"{len(ss.fm_results)} solution(s) France Mobilités.",
+            kept("France Mobilités"))
+    if ss.data_results:
+        add("11", "Données ouvertes", "📊", f"{len(ss.data_results)} source(s) de données.",
+            [x for x in ss.retenus.values() if x.get("origine") in ("data.gouv.fr", "INSEE (Melodi)")])
+    if ss.fin_results:
+        add("12", "Financements", "💶", f"{len(ss.fin_results)} aide(s) identifiée(s).", kept("Financements"))
+    return steps
+
+
+def render_parcours(steps: list[dict]):
+    """Frise verticale du parcours (HTML échappé)."""
+    items = []
+    for stp in steps:
+        liens = "".join(
+            f'<li><a href="{html.escape(l["url"])}" target="_blank" rel="noopener">'
+            f'{html.escape(l.get("titre", ""))}</a></li>'
+            for l in stp["liens"][:5] if l.get("url"))
+        items.append(f"""
+<div class="pc-step">
+  <div class="pc-dot">{stp['icone']}</div>
+  <div class="pc-body">
+    <div class="pc-title">Phase {html.escape(stp['num'])} · {html.escape(stp['nom'])}</div>
+    <div class="pc-text">{html.escape(stp['texte'])}</div>
+    {f'<ul class="pc-links">{liens}</ul>' if liens else ''}
+  </div>
+</div>""")
+    st.markdown("""
+<style>
+.pc-wrap { position: relative; margin: 8px 0 16px 0; }
+.pc-step { display: flex; gap: 14px; position: relative; padding-bottom: 14px; }
+.pc-step:not(:last-child)::before { content: ""; position: absolute; left: 17px; top: 38px; bottom: 0;
+  width: 2px; background: #b9dcc9; }
+.pc-dot { flex: 0 0 36px; height: 36px; border-radius: 50%; background: #e8f5ee; border: 2px solid #1a7a4a;
+  display: flex; align-items: center; justify-content: center; font-size: 1.05rem; }
+.pc-body { flex: 1; min-width: 0; }
+.pc-title { font-weight: 600; color: #1a7a4a; font-size: 0.9rem; }
+.pc-text { font-size: 0.95rem; line-height: 1.45; overflow-wrap: anywhere; }
+.pc-links { margin: 4px 0 0 0; padding-left: 18px; font-size: 0.88rem; }
+</style>
+<div class="pc-wrap">""" + "".join(items) + "</div>", unsafe_allow_html=True)
+
+
+def docx_hyperlink(paragraph, text: str, url: str):
+    """Ajoute un lien cliquable dans un paragraphe Word."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    r_id = paragraph.part.relate_to(
+        url, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        is_external=True)
+    link = OxmlElement("w:hyperlink")
+    link.set(qn("r:id"), r_id)
+    run = OxmlElement("w:r")
+    rpr = OxmlElement("w:rPr")
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "0563C1")
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "single")
+    rpr.append(color)
+    rpr.append(underline)
+    run.append(rpr)
+    t = OxmlElement("w:t")
+    t.text = text
+    t.set(qn("xml:space"), "preserve")
+    run.append(t)
+    link.append(run)
+    paragraph._p.append(link)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -2650,7 +2797,17 @@ elif st.session_state.phase == 12:
                  "Votre problème, et tout ce qui existe déjà pour vous aider à le traiter.")
 
     if require_problem():
+        # ── Parcours réalisé ──
+        steps = parcours_steps()
+        if steps:
+            st.subheader("🧭 Le parcours réalisé")
+            st.caption("Du problème tel que vous l'avez exprimé jusqu'aux ressources et financements "
+                       "identifiés. Les liens mènent aux ressources retenues.")
+            render_parcours(steps)
+            st.divider()
+
         retenus = list(st.session_state.retenus.values())
+        idx = retenus_index()
         if not retenus:
             st.warning("Vous n'avez retenu aucune ressource. Revenez aux phases 8 à 12 et cochez "
                        "« Retenir » sur celles qui vous intéressent.")
@@ -2662,23 +2819,24 @@ elif st.session_state.phase == 12:
             for origine, items in groupes.items():
                 st.markdown(f"**{origine}**")
                 for r in items:
-                    lien = f"[{r.get('titre', '')}]({r['url']})" if r.get("url") else r.get("titre", "")
-                    st.markdown(f"- {lien} — *{r.get('comment_mobiliser') or r.get('pourquoi', '')}*")
+                    st.markdown(f"- {link_md(r)} — *{r.get('comment_mobiliser') or r.get('pourquoi', '')}*")
 
             if st.button("🧭 Générer la feuille de route de mobilisation", type="primary",
                          disabled=not API_KEY):
                 listing = "\n".join(
-                    f"- [{r.get('origine')}] {r.get('titre')} : {r.get('comment_mobiliser') or r.get('pourquoi', '')}"
-                    for r in retenus)
+                    f"[{sid}] ({r.get('origine')}) {r.get('titre')} : "
+                    f"{r.get('comment_mobiliser') or r.get('pourquoi', '')}"
+                    for sid, r in idx.items())
                 prompt = f"""{problem_brief()}
 
-Ressources existantes retenues par l'expert :
+Ressources existantes retenues par l'expert, chacune avec son identifiant :
 {listing}
 
 Propose une feuille de route pour s'appuyer sur ces ressources plutôt que de repartir de zéro.
+Désigne TOUJOURS les ressources par leur identifiant (s1, s2…), jamais par leur titre.
 Réponds UNIQUEMENT en JSON valide (aucun markdown) :
 - "message_cle" : 1-2 phrases — ce que l'existant change dans la manière d'aborder le problème
-- "actions" : 3 à 6 objets {{"action": "intitulé court", "ressources": "titres des ressources mobilisées", "detail": "1-2 phrases", "echeance": "ex : Mois 1"}}
+- "actions" : 3 à 6 objets {{"action": "intitulé court", "ressources": ["s1", "s4"], "detail": "1-2 phrases (tu peux citer une ressource ainsi : [s2])", "echeance": "ex : Mois 1"}}
 - "a_construire" : 1-3 phrases — ce qui reste à construire car rien n'existe (la vraie valeur ajoutée du projet)"""
                 with st.spinner("Rédaction de la feuille de route…"):
                     data = parse_json(claude(prompt, max_tokens=2000))
@@ -2693,8 +2851,14 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
                     st.info(fr_["message_cle"])
                 for i, a in enumerate(fr_.get("actions", []), 1):
                     if isinstance(a, dict):
-                        st.markdown(f"**{i}. {a.get('action', '')}** — ⏱ `{a.get('echeance', '')}`")
-                        st.caption(f"{a.get('detail', '')}  \n📎 {a.get('ressources', '')}")
+                        with st.container(border=True):
+                            st.markdown(f"**{i}. {a.get('action', '')}** — ⏱ `{a.get('echeance', '')}`")
+                            st.markdown(cite_retenus(a.get("detail", ""), idx))
+                            res = action_resources(a, idx)
+                            if res:
+                                st.markdown("📎 **Ressources** : " + " · ".join(link_md(x) for x in res))
+                            elif a.get("ressources") and not isinstance(a.get("ressources"), list):
+                                st.caption(f"📎 {a['ressources']}")
                 if fr_.get("a_construire"):
                     st.success(f"🏗️ **Ce qui reste à construire** : {fr_['a_construire']}")
 
@@ -2708,6 +2872,17 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
                 doc = Doc()
                 doc.add_heading("Fiche Problème enrichie", 0)
                 doc.add_paragraph(f"Générée le {datetime.now().strftime('%d/%m/%Y à %H:%M')}")
+                steps_w = parcours_steps()
+                if steps_w:
+                    doc.add_heading("Le parcours réalisé", level=1)
+                    for stp in steps_w:
+                        p = doc.add_paragraph(style="List Bullet")
+                        p.add_run(f"Phase {stp['num']} · {stp['nom']} : ").bold = True
+                        p.add_run(stp["texte"])
+                        for l in stp["liens"][:5]:
+                            if l.get("url"):
+                                q = doc.add_paragraph(style="List Bullet 2")
+                                docx_hyperlink(q, l.get("titre", ""), l["url"])
                 doc.add_heading("Le problème", level=1)
                 if st.session_state.hmw:
                     doc.add_paragraph().add_run(st.session_state.hmw).bold = True
@@ -2745,9 +2920,13 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
                     if refs_b:
                         doc.add_heading("Références", level=2)
                         for i, r in enumerate(refs_b, 1):
-                            doc.add_paragraph(
-                                f"[{i}] {r.get('auteurs', '')} ({r.get('annee', '') or 's.d.'}). "
-                                f"{r.get('titre', '')}. {r.get('revue', '') or r.get('source', '')}. {r.get('url', '')}")
+                            p = doc.add_paragraph(
+                                f"[{i}] {r.get('auteurs', '')} ({r.get('annee', '') or 's.d.'}). ")
+                            if r.get("url"):
+                                docx_hyperlink(p, r.get("titre", ""), r["url"])
+                            else:
+                                p.add_run(r.get("titre", ""))
+                            p.add_run(f". {r.get('revue', '') or r.get('source', '')}.")
                 for titre_s, synth in [("Communs & ressources (wiki FabMob)", st.session_state.wiki_synthese),
                                        ("Solutions France Mobilités", st.session_state.fm_synthese),
                                        ("Données ouvertes", st.session_state.data_synthese),
@@ -2759,20 +2938,39 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
                     doc.add_heading("Ressources retenues", level=1)
                     for r in st.session_state.retenus.values():
                         p = doc.add_paragraph(style="List Bullet")
-                        p.add_run(f"[{r.get('origine', '')}] {r.get('titre', '')}").bold = True
+                        p.add_run(f"[{r.get('origine', '')}] ").bold = True
+                        if r.get("url"):
+                            docx_hyperlink(p, r.get("titre", ""), r["url"])
+                        else:
+                            p.add_run(r.get("titre", "")).bold = True
                         txt = r.get("comment_mobiliser") or r.get("pourquoi") or ""
-                        p.add_run(f" — {txt}\n{r.get('url', '')}")
+                        if txt:
+                            p.add_run(f" — {txt}")
                 fr_ = st.session_state.feuille_route
                 if fr_:
                     doc.add_heading("Feuille de route de mobilisation", level=1)
                     if fr_.get("message_cle"):
                         doc.add_paragraph(fr_["message_cle"])
+                    idx_w = retenus_index()
                     for a in fr_.get("actions", []):
                         if isinstance(a, dict):
                             p = doc.add_paragraph(style="List Number")
                             p.add_run(a.get("action", "")).bold = True
-                            p.add_run(f" ({a.get('echeance', '')}) — {a.get('detail', '')} "
-                                      f"Ressources : {a.get('ressources', '')}")
+                            detail = re.sub(r"\[(s\d+)\]", lambda m: f"« {idx_w[m.group(1)].get('titre', '')} »"
+                                            if m.group(1) in idx_w else "", a.get("detail", ""))
+                            p.add_run(f" ({a.get('echeance', '')}) — {detail}")
+                            res = action_resources(a, idx_w)
+                            if res:
+                                p.add_run(" Ressources : ")
+                                for j, x in enumerate(res):
+                                    if j:
+                                        p.add_run(" · ")
+                                    if x.get("url"):
+                                        docx_hyperlink(p, x.get("titre", ""), x["url"])
+                                    else:
+                                        p.add_run(x.get("titre", ""))
+                            elif a.get("ressources") and not isinstance(a.get("ressources"), list):
+                                p.add_run(f" Ressources : {a['ressources']}")
                     if fr_.get("a_construire"):
                         doc.add_heading("Ce qui reste à construire", level=2)
                         doc.add_paragraph(fr_["a_construire"])
