@@ -6,7 +6,7 @@ repartir de zéro.
 
 ---
 
-## 📐 Les 12 phases
+## 📐 Les 13 phases
 
 | Phase | Nom | Ce qu'elle fait |
 |-------|-----|-----------------|
@@ -17,13 +17,17 @@ repartir de zéro.
 | 5 | Ressources & Contraintes | Budget, équipe, délais, objectifs |
 | 6 | Test de Cohérence | Le sous-problème est-il à votre portée ? |
 | 7 | Formulation Finale | « Comment pourrions-nous… », indicateurs, risques |
-| 8 | Communs & Ressources | Communs, projets, acteurs et connaissances du [wiki de la Fabrique des Mobilités](https://wiki.lafabriquedesmobilites.fr) |
-| 9 | Solutions & Acteurs | Solutions recensées par [France Mobilités](https://www.francemobilites.fr/solutions) et leurs porteurs |
-| 10 | Données Ouvertes | Jeux de données et API de [data.gouv.fr](https://www.data.gouv.fr), catalogue [Melodi de l'INSEE](https://catalogue-donnees.insee.fr) |
-| 11 | Financements | Aides publiques ouvertes : [Aides-territoires](https://aides-territoires.beta.gouv.fr) (≈ 3 000 aides) et [Mission Transition Écologique](https://mission-transition-ecologique.beta.gouv.fr) (aides aux entreprises), filtrées par type de porteur et territoire |
-| 12 | Synthèse & Export | Ressources retenues, feuille de route, fiche Word |
+| 8 | Bibliographie | Synthèse bibliographique à partir de [HAL](https://hal.science) (CNRS, Cerema, Université Gustave Eiffel, INRAE…), de la [librairie ADEME](https://librairie.ademe.fr) et d'[OpenAlex](https://openalex.org) : état des connaissances, leviers efficaces, débats, lacunes, références |
+| 9 | Communs & Ressources | Communs, projets, acteurs et connaissances du [wiki de la Fabrique des Mobilités](https://wiki.lafabriquedesmobilites.fr) |
+| 10 | Solutions & Acteurs | Solutions recensées par [France Mobilités](https://www.francemobilites.fr/solutions) et leurs porteurs |
+| 11 | Données Ouvertes | Jeux de données et API de [data.gouv.fr](https://www.data.gouv.fr), catalogue [Melodi de l'INSEE](https://catalogue-donnees.insee.fr) |
+| 12 | Financements | Aides publiques ouvertes : [Aides-territoires](https://aides-territoires.beta.gouv.fr) (≈ 3 000 aides) et [Mission Transition Écologique](https://mission-transition-ecologique.beta.gouv.fr) (aides aux entreprises), filtrées par type de porteur et territoire |
+| 13 | Synthèse & Export | Ressources retenues, feuille de route, fiche Word |
 
-Dans les phases 8 à 11, l'outil extrait des mots-clés du problème (modifiables), présélectionne les
+Chaque phase comporte un encadré **« ℹ️ À propos de cette étape »** : description, objectifs,
+outils et ressources utilisés.
+
+Dans les phases 8 à 12, l'outil extrait des mots-clés du problème (modifiables), présélectionne les
 fiches correspondantes dans chaque source, puis Claude choisit les plus pertinentes et explique
 comment s'en servir. Cochez **Retenir** pour les garder dans la fiche finale.
 
@@ -93,6 +97,10 @@ WIKI_USER_AGENT = "nouveau-nom"
   auprès du financeur.
 - **Mission Transition Écologique** : l'outil lit la liste des aides affichée sur le site, qui n'est pas
   une API officielle documentée et peut changer.
+- **Bibliographie** : la synthèse est rédigée par Claude à partir des titres et résumés, en citant
+  uniquement les publications trouvées. Vérifiez les publications originales avant de les citer.
+  La base documentaire du Cerema (CeremaDoc) n'offre pas d'accès simple : les publications du Cerema
+  sont cherchées dans sa collection HAL.
 - Les pages « Connaissance » du wiki sont repérées par leur type de page (elles sont rangées dans la
   catégorie « Référentiel »).
 

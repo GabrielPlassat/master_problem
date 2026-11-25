@@ -71,11 +71,12 @@ PHASES = [
     ("5", "Ressources & Contraintes", "Décrire précisément vos moyens"),
     ("6", "Test de Cohérence",        "Évaluer la faisabilité du sous-problème"),
     ("7", "Formulation Finale",       "Formuler, exporter et agir"),
-    ("8", "Communs & Ressources",      "Ce qui existe déjà sur le wiki de la Fabrique des Mobilités"),
-    ("9", "Solutions & Acteurs",       "Solutions déjà déployées, recensées par France Mobilités"),
-    ("10", "Données Ouvertes",         "Données pour mesurer et piloter (data.gouv.fr, INSEE)"),
-    ("11", "Financements",             "Aides publiques ouvertes (Aides-territoires, Mission Transition Écologique)"),
-    ("12", "Synthèse & Export",        "Votre fiche enrichie, prête à partager"),
+    ("8", "Bibliographie",             "Ce que dit la recherche publique sur le problème"),
+    ("9", "Communs & Ressources",      "Ce qui existe déjà sur le wiki de la Fabrique des Mobilités"),
+    ("10", "Solutions & Acteurs",      "Solutions déjà déployées, recensées par France Mobilités"),
+    ("11", "Données Ouvertes",         "Données pour mesurer et piloter (data.gouv.fr, INSEE)"),
+    ("12", "Financements",             "Aides publiques ouvertes (Aides-territoires, Mission Transition Écologique)"),
+    ("13", "Synthèse & Export",        "Votre fiche enrichie, prête à partager"),
 ]
 
 CYNEFIN_INFO = {
@@ -116,7 +117,7 @@ DEFAULTS = {
     "hmw": "",
     "final_data": {},
     # Phases 8 à 11 — explorer ce qui existe déjà
-    "mots_cles": [],            # mots-clés du problème (partagés par les phases 8 à 11)
+    "mots_cles": [],            # mots-clés du problème (partagés par les phases 8 à 12)
     "requetes_donnees": [],     # requêtes de recherche de données ouvertes
     "wiki_results": {},         # {type: [fiches classées par Claude]}
     "wiki_synthese": "",
@@ -124,6 +125,10 @@ DEFAULTS = {
     "fm_synthese": "",
     "data_results": [],         # jeux de données classés
     "data_synthese": "",
+    "biblio_requetes_fr": [],   # requêtes de recherche bibliographique (français)
+    "biblio_requetes_en": [],   # requêtes de recherche bibliographique (anglais, pour OpenAlex)
+    "biblio_results": [],       # publications sélectionnées par Claude
+    "biblio_synthese": {},      # synthèse bibliographique structurée
     "fin_results": [],          # aides financières classées par Claude
     "fin_synthese": "",
     "fin_porteur": "Tous types de porteurs",
@@ -379,7 +384,7 @@ def build_save() -> str:
     state = {k: st.session_state.get(k, v) for k, v in DEFAULTS.items()}
     payload = {
         "app": SAVE_APP_ID,
-        "version": 2,
+        "version": 3,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
         "phase_label": PHASES[st.session_state.phase][1],
         "state": state,
@@ -434,7 +439,15 @@ def load_save(raw: bytes) -> str | None:
         return "Fichier illisible : ce n'est pas un JSON valide."
     if isinstance(payload, dict) and payload.get("app") == SAVE_APP_ID \
             and isinstance(payload.get("state"), dict):
-        state = payload["state"]
+        state = dict(payload["state"])
+        # Version 2 : pas encore de phase Bibliographie (insérée après la phase 7)
+        if int(payload.get("version") or 2) < 3:
+            for k in ("phase", "max_phase"):
+                try:
+                    if int(state.get(k, 0)) >= 7:
+                        state[k] = int(state[k]) + 1
+                except (TypeError, ValueError):
+                    pass
     else:
         state = export_to_state(payload)
         if state is None:
@@ -528,6 +541,127 @@ with st.sidebar:
     st.caption("Basé sur : Cynefin (Snowden), Problem Statement Canvas, JTBD, Double Diamant, HMW (IDEO), Frame Innovation (Dorst)")
 
 
+# ─── DESCRIPTION DE CHAQUE ÉTAPE ────────────────────────────────────────────────
+# Affichée sous l'en-tête de chaque phase (« À propos de cette étape »)
+PHASE_INFO = {
+    "1": {
+        "description": "Vous décrivez librement votre problème général, avec si besoin des documents de "
+                       "contexte. Claude le reformule, en identifie la nature et repère les zones d'ombre.",
+        "objectifs": ["Passer d'une intention à un problème explicite",
+                      "Repérer les ambiguïtés et les informations manquantes",
+                      "Situer la nature du problème (clair, compliqué, complexe, pernicieux)"],
+        "outils": ["Claude (analyse et reformulation)",
+                   "Cadre Cynefin (Dave Snowden)",
+                   "Import de documents : PDF, Word, texte, rapports SofIA (ADEME)"],
+    },
+    "2": {
+        "description": "Claude présente quatre cas historiques où des experts jugeaient une chose impossible "
+                       "et se sont trompés, chacun relié à votre problème. Vous notez vos réactions et la leçon "
+                       "que vous en tirez.",
+        "objectifs": ["Questionner les certitudes du domaine",
+                      "Laisser de la place aux ruptures venues d'ailleurs"],
+        "outils": ["Claude (cas historiques et analogies)", "Vos réactions et votre leçon personnelle"],
+    },
+    "3": {
+        "description": "Claude joue le rôle d'un « éclaireur » et propose quatre technologies ou approches "
+                       "récentes venues d'autres domaines, avec leur maturité, leurs applications possibles et "
+                       "leurs risques. Vous retenez celles qui ouvrent un angle nouveau.",
+        "objectifs": ["Élargir le champ des solutions possibles",
+                      "Identifier des sous-problèmes que ces technologies rendent accessibles"],
+        "outils": ["Claude (veille technologique)",
+                   "Échelle de maturité TRL (1 à 9)",
+                   "Principe DARPA : le regard d'un non-spécialiste du domaine"],
+    },
+    "4": {
+        "description": "Claude propose six sous-problèmes candidats, variés par acteur ciblé, levier et horizon. "
+                       "Vous en choisissez un ou deux ; Claude peut les fusionner en un sous-problème affiné.",
+        "objectifs": ["Faire un choix plutôt que de tout vouloir résoudre",
+                      "Formuler un sous-problème précis et actionnable"],
+        "outils": ["Claude (décomposition et synthèse)",
+                   "Données SofIA et technologies retenues en phase 3",
+                   "Double diamant, Frame Innovation (Kees Dorst)"],
+    },
+    "5": {
+        "description": "Vous décrivez vos moyens réels : budget, équipe, compétences, durée, premier jalon, "
+                       "objectifs, partenaires et ce qui a déjà été tenté.",
+        "objectifs": ["Calibrer l'ambition sur les moyens, et non l'inverse",
+                      "Préparer le test de cohérence"],
+        "outils": ["Formulaire de saisie (enregistré au fil de l'eau)"],
+    },
+    "6": {
+        "description": "Claude évalue l'adéquation entre le sous-problème et vos moyens selon quatre critères "
+                       "notés sur 25, rend un verdict et propose si besoin un recadrage.",
+        "objectifs": ["Vérifier que le sous-problème est à votre portée",
+                      "Identifier les risques et les ajustements nécessaires"],
+        "outils": ["Claude (évaluateur rigoureux)",
+                   "Grille : mesurabilité, premier jalon, compétences, précédents"],
+    },
+    "7": {
+        "description": "Claude formule le problème final (« Comment pourrions-nous… »), le brief, les "
+                       "indicateurs de succès, les trois premières actions, les risques et les questions à "
+                       "trancher. Vous pouvez aussi saisir directement un problème déjà formulé.",
+        "objectifs": ["Disposer d'un problème bien posé, partageable et mesurable",
+                      "Préparer la recherche de ce qui existe déjà (phases 8 à 12)"],
+        "outils": ["Claude (formulation)",
+                   "« How Might We » (IDEO), Problem Statement Canvas",
+                   "Export Word et JSON, sauvegarde de progression"],
+    },
+    "8": {
+        "description": "L'outil interroge les archives de la recherche publique, la librairie de l'ADEME et la "
+                       "littérature internationale, puis Claude rédige une synthèse bibliographique : état des "
+                       "connaissances, enseignements, leviers efficaces, débats, lacunes et références.",
+        "objectifs": ["S'appuyer sur l'état des connaissances avant d'agir",
+                      "Identifier les leviers dont l'efficacité est démontrée",
+                      "Repérer ce que la recherche ne dit pas encore"],
+        "outils": ["HAL : archives ouvertes de la recherche publique (CNRS, Cerema, Université Gustave Eiffel, "
+                   "INRAE…)",
+                   "Librairie ADEME : études, guides et rapports",
+                   "OpenAlex : littérature scientifique internationale",
+                   "Claude (lecture des résumés et synthèse, sans invention de références)"],
+    },
+    "9": {
+        "description": "L'outil cherche dans le wiki de la Fabrique des Mobilités les communs, projets, acteurs "
+                       "et connaissances liés au problème ; Claude sélectionne les plus utiles.",
+        "objectifs": ["Ne pas réinventer ce qui existe déjà en commun",
+                      "Repérer des projets dont s'inspirer et des acteurs à solliciter"],
+        "outils": ["Wiki de la Fabrique des Mobilités (≈ 2 500 fiches)",
+                   "Claude (sélection et explication)"],
+    },
+    "10": {
+        "description": "L'outil cherche dans le catalogue France Mobilités les solutions déjà déployées et "
+                       "leurs porteurs ; Claude sélectionne les plus pertinentes.",
+        "objectifs": ["Connaître les solutions existantes et leur maturité",
+                      "Identifier les acteurs à contacter"],
+        "outils": ["France Mobilités (≈ 900 solutions)", "Claude (sélection et explication)"],
+    },
+    "11": {
+        "description": "L'outil cherche les jeux de données et API publics utiles pour mesurer la situation de "
+                       "départ et suivre vos indicateurs.",
+        "objectifs": ["Objectiver le problème avec des données",
+                      "Trouver de quoi calculer vos indicateurs de succès"],
+        "outils": ["data.gouv.fr (jeux de données et API)",
+                   "Catalogue Melodi de l'INSEE",
+                   "Claude (sélection et lien avec vos indicateurs)"],
+    },
+    "12": {
+        "description": "L'outil cherche les aides publiques ouvertes selon le type de porteur et le territoire ; "
+                       "Claude retient celles auxquelles vous êtes éligible et indique ce qu'elles financent.",
+        "objectifs": ["Identifier les financements mobilisables",
+                      "Repérer les dates limites et les financeurs à contacter"],
+        "outils": ["Aides-territoires (≈ 3 000 aides : État, ADEME, Régions, Départements, Europe…)",
+                   "Mission Transition Écologique (aides aux entreprises)",
+                   "Claude (éligibilité et usage)"],
+    },
+    "13": {
+        "description": "Vous retrouvez toutes les ressources retenues ; Claude propose une feuille de route pour "
+                       "s'appuyer sur l'existant, et vous exportez une fiche Word complète.",
+        "objectifs": ["Rassembler problème, connaissances, ressources et financements",
+                      "Identifier ce qui reste vraiment à construire"],
+        "outils": ["Claude (feuille de route)", "Export Word"],
+    },
+}
+
+
 # ─── PHASE HEADER HELPER ────────────────────────────────────────────────────────
 def phase_header(num, name, desc):
     st.markdown(f"""
@@ -536,6 +670,17 @@ def phase_header(num, name, desc):
   <p>{desc}</p>
 </div>
 """, unsafe_allow_html=True)
+    info = PHASE_INFO.get(str(num))
+    if info:
+        with st.expander("ℹ️ À propos de cette étape : description, objectifs, outils et ressources"):
+            st.markdown(f"**Description** — {info['description']}")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**🎯 Objectifs**")
+                st.markdown("\n".join(f"- {o}" for o in info["objectifs"]))
+            with c2:
+                st.markdown("**🧰 Outils et ressources**")
+                st.markdown("\n".join(f"- {o}" for o in info["outils"]))
 
 
 # ─── PHASES 8-11 : HELPERS ──────────────────────────────────────────────────────
@@ -555,9 +700,10 @@ def problem_brief() -> str:
 
 
 def reset_exploration():
-    """Nouveau problème : les mots-clés et résultats des phases 8 à 11 ne sont plus valables."""
+    """Nouveau problème : les mots-clés et résultats des phases 8 à 12 ne sont plus valables."""
     for k in ("mots_cles", "requetes_donnees", "wiki_results", "wiki_synthese", "fm_results",
               "fm_synthese", "data_results", "data_synthese", "fin_results", "fin_synthese",
+              "biblio_requetes_fr", "biblio_requetes_en", "biblio_results", "biblio_synthese",
               "feuille_route"):
         st.session_state[k] = copy.deepcopy(DEFAULTS[k])
 
@@ -600,6 +746,16 @@ def require_problem() -> bool:
     return True
 
 
+def _clean_terms(terms) -> list[str]:
+    """Mots-clés proposés par Claude : tirets remplacés par des espaces, doublons retirés."""
+    out = []
+    for t in terms or []:
+        t = re.sub(r"\s+", " ", str(t).replace("-", " ").replace("_", " ")).strip()
+        if t and t.lower() not in (o.lower() for o in out):
+            out.append(t)
+    return out
+
+
 def ensure_keywords(force: bool = False) -> bool:
     """Demande à Claude les mots-clés et requêtes de recherche, une seule fois."""
     if st.session_state.mots_cles and not force:
@@ -608,14 +764,14 @@ def ensure_keywords(force: bool = False) -> bool:
 
 Pour rechercher ce qui existe déjà sur ce problème (communs, projets, solutions, acteurs, données ouvertes),
 fournis en JSON valide (aucun markdown) :
-- "mots_cles" : 10 à 15 mots-clés SIMPLES EN FRANÇAIS, un seul mot de préférence (deux au maximum, jamais de phrase), tels qu'on les taperait dans un moteur de recherche. Du plus spécifique au plus général, avec les synonymes usuels du secteur. Exemple : ["covoiturage", "autopartage", "rural", "périurbain", "domicile-travail", "navette", "autostop"]. Pas de mots vides, pas de termes trop génériques comme "mobilité" seul.
-- "requetes_donnees" : 4 à 6 requêtes de 1 ou 2 mots pour chercher des jeux de données ouverts utiles pour mesurer ce problème et ses indicateurs. Exemple : ["covoiturage", "aires covoiturage", "domicile-travail", "transport public"]."""
+- "mots_cles" : 10 à 15 mots-clés SIMPLES EN FRANÇAIS, de 1 ou 2 mots séparés par un ESPACE (jamais de tiret pour relier des mots, jamais de phrase), tels qu'on les taperait dans un moteur de recherche. Du plus spécifique au plus général, avec les synonymes usuels du secteur. Exemple : ["covoiturage", "autopartage", "rural", "périurbain", "domicile travail", "navette", "autostop"]. Pas de mots vides, pas de termes trop génériques comme "mobilité" seul.
+- "requetes_donnees" : 4 à 6 requêtes de 1 ou 2 mots (séparés par un espace) pour chercher des jeux de données ouverts utiles pour mesurer ce problème et ses indicateurs. Exemple : ["covoiturage", "aires covoiturage", "domicile travail", "transport public"]."""
     with st.spinner("Extraction des mots-clés du problème…"):
         data = parse_json(claude(prompt, max_tokens=800))
     if not data:
         return False
-    st.session_state.mots_cles = [str(k) for k in data.get("mots_cles", []) if str(k).strip()]
-    st.session_state.requetes_donnees = [str(k) for k in data.get("requetes_donnees", []) if str(k).strip()]
+    st.session_state.mots_cles = _clean_terms(data.get("mots_cles", []))
+    st.session_state.requetes_donnees = _clean_terms(data.get("requetes_donnees", []))
     return bool(st.session_state.mots_cles)
 
 
@@ -2021,10 +2177,168 @@ le périmètre avant de vous lancer. Un bon problème bien formulé, c'est déj�
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# PHASE 7 — COMMUNS & RESSOURCES (wiki de la Fabrique des Mobilités)
+# PHASE 7 — BIBLIOGRAPHIE SCIENTIFIQUE (HAL, OpenAlex, librairie ADEME)
 # ════════════════════════════════════════════════════════════════════════════════
 elif st.session_state.phase == 7:
-    phase_header("8", "Communs & Ressources",
+    phase_header("8", "Bibliographie",
+                 "Ce que dit la recherche publique sur votre problème : synthèse et références.")
+
+    if require_problem():
+        st.markdown("""
+> Avant d'agir, s'appuyer sur l'état des connaissances : publications de la recherche publique
+> française ([HAL](https://hal.science) : CNRS, Cerema, Université Gustave Eiffel, INRAE…),
+> études et guides de la [librairie ADEME](https://librairie.ademe.fr), et littérature
+> scientifique internationale ([OpenAlex](https://openalex.org)).
+""")
+
+        # Requêtes de recherche (proposées par Claude, modifiables)
+        if not st.session_state.biblio_requetes_fr and API_KEY:
+            if st.button("🧠 Préparer les requêtes de recherche", type="primary"):
+                prompt = f"""{problem_brief()}
+
+Prépare une recherche bibliographique scientifique sur ce problème. Réponds UNIQUEMENT en JSON valide :
+- "requetes_fr" : 4 à 6 requêtes EN FRANÇAIS de 2 à 4 mots, séparés par des espaces (pas de tirets), comme on les taperait dans HAL ou un catalogue de bibliothèque. Couvre les différentes facettes du problème (comportements, aménagement, politiques publiques, santé, économie…).
+- "requetes_en" : 3 à 5 requêtes EN ANGLAIS de 2 à 5 mots, avec le vocabulaire scientifique usuel du domaine (ex : "walking modal share", "active travel older adults")."""
+                with st.spinner("Préparation des requêtes…"):
+                    data = parse_json(claude(prompt, max_tokens=600))
+                if data:
+                    st.session_state.biblio_requetes_fr = _clean_terms(data.get("requetes_fr", []))
+                    st.session_state.biblio_requetes_en = [str(q).strip() for q in data.get("requetes_en", [])
+                                                           if str(q).strip()]
+                    st.rerun()
+
+        if st.session_state.biblio_requetes_fr or not API_KEY:
+            with st.expander("🔑 Requêtes de recherche (modifiables)", expanded=True):
+                st.caption("Une requête par ligne ou séparées par des virgules. Les requêtes en anglais "
+                           "servent à la littérature internationale (OpenAlex).")
+                fr_txt = st.text_area("Requêtes en français (HAL, librairie ADEME)",
+                                      value=", ".join(st.session_state.biblio_requetes_fr), height=80)
+                st.session_state.biblio_requetes_fr = _split_list(fr_txt)
+                en_txt = st.text_area("Requêtes en anglais (OpenAlex)",
+                                      value=", ".join(st.session_state.biblio_requetes_en), height=60)
+                st.session_state.biblio_requetes_en = _split_list(en_txt)
+
+            if st.button("📚 Rechercher et synthétiser la littérature", type="primary",
+                         disabled=not API_KEY or not st.session_state.biblio_requetes_fr):
+                qfr, qen = st.session_state.biblio_requetes_fr, st.session_state.biblio_requetes_en
+                kws = st.session_state.mots_cles or qfr
+                with st.spinner("Interrogation de HAL, OpenAlex et de la librairie ADEME…"):
+                    cands, errors = sources.biblio_candidates(qfr, qen, kws)
+                for e in errors:
+                    st.warning(f"⚠️ Source inaccessible : {e}")
+
+                if cands:
+                    by_id = {f"r{i}": c for i, c in enumerate(cands, 1)}
+                    listing = "\n\n".join(
+                        f"[{rid}] {c['titre']} — {c.get('auteurs', '')} ({c.get('annee', '') or 's.d.'}) "
+                        f"— {c['source']}, {c.get('type', '')}"
+                        + (f", structures : {', '.join(c['structures'])}" if c.get("structures") else "")
+                        + (f", {c['citations']} citations" if c.get("citations") else "")
+                        + (f"\nRésumé : {c['resume'][:700]}" if c.get("resume") else "")
+                        for rid, c in by_id.items())
+                    prompt = f"""{problem_brief()}
+
+Voici des publications trouvées dans HAL (recherche publique française), OpenAlex (littérature internationale)
+et la librairie ADEME. Certaines peuvent être hors sujet.
+
+{listing}
+
+Rédige une synthèse bibliographique UTILE pour l'expert qui traite CE problème, en t'appuyant UNIQUEMENT
+sur ces publications (titres et résumés). Cite les sources par leur identifiant entre crochets, ex : [r3].
+N'invente aucun chiffre ni aucune référence absente de la liste. Écarte les publications hors sujet.
+
+Réponds UNIQUEMENT en JSON valide (aucun markdown) :
+{{
+ "etat_des_connaissances": "1 paragraphe de 5-8 phrases, avec citations [rX]",
+ "enseignements_cles": ["4 à 6 enseignements, chacun 1-2 phrases avec citations [rX]"],
+ "leviers_efficaces": ["2 à 4 leviers d'action que la littérature montre efficaces, avec citations"],
+ "controverses_et_limites": ["1 à 3 points de débat ou limites des connaissances"],
+ "lacunes": "1-2 phrases : ce que la recherche ne dit pas encore et que le projet pourrait éclairer",
+ "references": [{{"id": "r3", "apport": "1 phrase : ce que cette publication apporte au problème"}}]
+}}
+Dans "references", liste 8 à 15 publications réellement utiles, de la plus à la moins importante."""
+                    with st.spinner(f"Claude lit les {len(cands)} publications et rédige la synthèse…"):
+                        data = parse_json(claude(prompt, max_tokens=4000, system=(
+                            "Tu es un chercheur rigoureux qui rédige des revues de littérature en français. "
+                            "Tu ne cites que les sources fournies et tu n'inventes rien. Tu réponds en JSON valide.")))
+                    if data:
+                        refs = []
+                        for r in data.get("references", []):
+                            c = by_id.get(str(r.get("id", "")).strip())
+                            if c:
+                                refs.append({**c, "ref_id": r["id"], "pertinence": "forte",
+                                             "pourquoi": r.get("apport", ""), "comment_mobiliser": ""})
+                        st.session_state.biblio_results = refs
+                        data["_ids"] = {rid: {"titre": c["titre"], "url": c.get("url", "")}
+                                        for rid, c in by_id.items()}
+                        st.session_state.biblio_synthese = data
+                elif not errors:
+                    st.warning("Aucune publication trouvée. Essayez des requêtes plus courtes ou plus générales.")
+
+        syn = st.session_state.biblio_synthese
+        refs = st.session_state.biblio_results
+        if syn:
+            ids = syn.get("_ids", {})
+            num = {r["ref_id"]: i for i, r in enumerate(refs, 1)}
+
+            def cite(txt: str) -> str:
+                """[r3] → [3] cliquable, numéroté comme dans la liste des références."""
+                def sub(m):
+                    rid = m.group(1)
+                    if rid in num and refs[num[rid] - 1].get("url"):
+                        return f"[[{num[rid]}]]({refs[num[rid] - 1]['url']})"
+                    if rid in ids and ids[rid].get("url"):
+                        return f"[[↗]]({ids[rid]['url']})"
+                    return ""
+                return re.sub(r"\[(r\d+)\]", sub, txt or "")
+
+            st.divider()
+            st.subheader("📖 Synthèse bibliographique")
+            if syn.get("etat_des_connaissances"):
+                st.markdown("**État des connaissances**")
+                st.markdown(cite(syn["etat_des_connaissances"]))
+            c1, c2 = st.columns(2)
+            with c1:
+                if syn.get("enseignements_cles"):
+                    st.markdown("**💡 Enseignements clés**")
+                    for e in syn["enseignements_cles"]:
+                        st.markdown(f"- {cite(e)}")
+                if syn.get("leviers_efficaces"):
+                    st.markdown("**✅ Leviers efficaces selon la littérature**")
+                    for e in syn["leviers_efficaces"]:
+                        st.markdown(f"- {cite(e)}")
+            with c2:
+                if syn.get("controverses_et_limites"):
+                    st.markdown("**⚖️ Débats et limites**")
+                    for e in syn["controverses_et_limites"]:
+                        st.markdown(f"- {cite(e)}")
+                if syn.get("lacunes"):
+                    st.markdown("**🔍 Ce que la recherche ne dit pas encore**")
+                    st.info(cite(syn["lacunes"]))
+
+            if refs:
+                st.subheader(f"📚 Références ({len(refs)})")
+                for i, r in enumerate(refs, 1):
+                    r2 = dict(r)
+                    r2["titre"] = f"[{i}] {r['titre']}"
+                    show_item(r2, "Bibliographie", [
+                        r.get("auteurs", ""), str(r.get("annee", "") or ""),
+                        r.get("type", ""), r.get("revue", ""), r.get("source", ""),
+                        ("Structures : " + ", ".join(r["structures"])) if r.get("structures") else "",
+                        f"{r['citations']} citations" if r.get("citations") else "",
+                    ])
+            st.caption("Synthèse rédigée par Claude à partir des titres et résumés : vérifiez les "
+                       "publications originales avant de les citer.")
+            st.button("✅ Continuer vers les communs →", type="primary", on_click=next_phase)
+        else:
+            st.button("Passer cette étape →", on_click=next_phase)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# PHASE 7 — COMMUNS & RESSOURCES (wiki de la Fabrique des Mobilités)
+# ════════════════════════════════════════════════════════════════════════════════
+elif st.session_state.phase == 8:
+    phase_header("9", "Communs & Ressources",
                  "Communs, projets, acteurs et connaissances du wiki de la Fabrique des Mobilités.")
 
     if require_problem():
@@ -2091,8 +2405,8 @@ elif st.session_state.phase == 7:
 # ════════════════════════════════════════════════════════════════════════════════
 # PHASE 8 — SOLUTIONS & ACTEURS (France Mobilités)
 # ════════════════════════════════════════════════════════════════════════════════
-elif st.session_state.phase == 8:
-    phase_header("9", "Solutions & Acteurs",
+elif st.session_state.phase == 9:
+    phase_header("10", "Solutions & Acteurs",
                  "Solutions déjà déployées en France et les acteurs qui les portent.")
 
     if require_problem():
@@ -2162,8 +2476,8 @@ elif st.session_state.phase == 8:
 # ════════════════════════════════════════════════════════════════════════════════
 # PHASE 9 — DONNÉES OUVERTES (data.gouv.fr + INSEE)
 # ════════════════════════════════════════════════════════════════════════════════
-elif st.session_state.phase == 9:
-    phase_header("10", "Données Ouvertes",
+elif st.session_state.phase == 10:
+    phase_header("11", "Données Ouvertes",
                  "Les données publiques pour objectiver le problème et suivre vos indicateurs.")
 
     if require_problem():
@@ -2225,8 +2539,8 @@ elif st.session_state.phase == 9:
 # ════════════════════════════════════════════════════════════════════════════════
 # PHASE 10 — FINANCEMENTS (Aides-territoires + Mission Transition Écologique)
 # ════════════════════════════════════════════════════════════════════════════════
-elif st.session_state.phase == 10:
-    phase_header("11", "Financements",
+elif st.session_state.phase == 11:
+    phase_header("12", "Financements",
                  "Les aides publiques ouvertes qui peuvent financer votre projet.")
 
     if require_problem():
@@ -2331,14 +2645,14 @@ elif st.session_state.phase == 10:
 # ════════════════════════════════════════════════════════════════════════════════
 # PHASE 11 — SYNTHÈSE & EXPORT
 # ════════════════════════════════════════════════════════════════════════════════
-elif st.session_state.phase == 11:
-    phase_header("12", "Synthèse & Export",
+elif st.session_state.phase == 12:
+    phase_header("13", "Synthèse & Export",
                  "Votre problème, et tout ce qui existe déjà pour vous aider à le traiter.")
 
     if require_problem():
         retenus = list(st.session_state.retenus.values())
         if not retenus:
-            st.warning("Vous n'avez retenu aucune ressource. Revenez aux phases 8 à 11 et cochez "
+            st.warning("Vous n'avez retenu aucune ressource. Revenez aux phases 8 à 12 et cochez "
                        "« Retenir » sur celles qui vous intéressent.")
         else:
             groupes: dict[str, list] = {}
@@ -2407,6 +2721,33 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
                     for k in kp:
                         doc.add_paragraph(f"{k.get('kpi', '')} : {k.get('cible', '')} {k.get('unite', '')} "
                                           f"— {k.get('echeance', '')}", style="List Bullet")
+                bs = st.session_state.biblio_synthese or {}
+                if bs:
+                    refs_b = st.session_state.biblio_results
+                    numb = {r["ref_id"]: i for i, r in enumerate(refs_b, 1)}
+
+                    def _c(t):
+                        return re.sub(r"\[(r\d+)\]",
+                                      lambda m: f"[{numb[m.group(1)]}]" if m.group(1) in numb else "", t or "")
+                    doc.add_heading("Synthèse bibliographique", level=1)
+                    if bs.get("etat_des_connaissances"):
+                        doc.add_paragraph(_c(bs["etat_des_connaissances"]))
+                    for titre_b, cle in [("Enseignements clés", "enseignements_cles"),
+                                         ("Leviers efficaces", "leviers_efficaces"),
+                                         ("Débats et limites", "controverses_et_limites")]:
+                        if bs.get(cle):
+                            doc.add_heading(titre_b, level=2)
+                            for e in bs[cle]:
+                                doc.add_paragraph(_c(e), style="List Bullet")
+                    if bs.get("lacunes"):
+                        doc.add_heading("Ce que la recherche ne dit pas encore", level=2)
+                        doc.add_paragraph(_c(bs["lacunes"]))
+                    if refs_b:
+                        doc.add_heading("Références", level=2)
+                        for i, r in enumerate(refs_b, 1):
+                            doc.add_paragraph(
+                                f"[{i}] {r.get('auteurs', '')} ({r.get('annee', '') or 's.d.'}). "
+                                f"{r.get('titre', '')}. {r.get('revue', '') or r.get('source', '')}. {r.get('url', '')}")
                 for titre_s, synth in [("Communs & ressources (wiki FabMob)", st.session_state.wiki_synthese),
                                        ("Solutions France Mobilités", st.session_state.fm_synthese),
                                        ("Données ouvertes", st.session_state.data_synthese),
@@ -2452,8 +2793,8 @@ Réponds UNIQUEMENT en JSON valide (aucun markdown) :
 # ════════════════════════════════════════════════════════════════════════════════
 # Balise canonical vers France Mobilités sur les pages qui affichent leurs solutions
 _fm_shown = (
-    (st.session_state.phase == 8 and st.session_state.fm_results)
-    or (st.session_state.phase == 11
+    (st.session_state.phase == 9 and st.session_state.fm_results)
+    or (st.session_state.phase == 12
         and any(r.get("origine") == "France Mobilités" for r in st.session_state.retenus.values()))
 )
 set_canonical(sources.FM_SOLUTIONS_PAGE if _fm_shown else None)
